@@ -1,17 +1,28 @@
 package com.mogobiz.cache.enrich
 
-import com.mogobiz.cache.exception.UnsupportedTypeException
 import com.typesafe.config.{Config, ConfigValueType}
 
 import scala.collection.JavaConversions._
 import scala.reflect.runtime.universe._
 
+/**
+ * Define helpers to typesafe's config
+ */
 object ConfigHelpers {
 
+  /**
+   * Implicit class for typesafe's config
+   * @param config
+   */
   implicit class RichConfig(config: Config) {
 
+    /**
+     *
+     * @param rootConfig needed for the default value of the store.
+     * @return build an EsConfig instance from a config file.
+     */
     def toEsConfig()(implicit rootConfig: Config): EsConfig = {
-      val esConfig: Config = rootConfig.getConfig("mogobiz.cache.server.es")
+      val esConfig: Config = config.getConfig("server")
       val protocol = esConfig.getString("protocol")
       val host = esConfig.getString("host")
       val port: Integer = esConfig.getInt("port")
@@ -23,21 +34,30 @@ object ConfigHelpers {
       EsConfig(protocol, host, port, index, tpe, scrollTime, fields, esConfig.getInt("maxClient"), size)
     }
 
+    /**
+     *
+     * @param path
+     * @param default
+     * @param tag
+     * @tparam A
+     * @return the default value if there is no path defined in the configuration file or the value at the given path.
+     *         Be careful of the default value which define the type to get. The config file has to match this type.
+     */
     def getOrElse[A](path: String, default: A)(implicit tag: TypeTag[A]): A = {
       if (config.hasPath(path)) {
-        tag.tpe match {
-          case TypeRef(_, c, _) => c match {
-            case aClass if (aClass.isClass && aClass.asClass == runtimeMirror(this.getClass.getClassLoader).classSymbol(classOf[String])) => config
-              .getAnyRef(path)
-              .asInstanceOf[A]
-            case aClass => throw UnsupportedTypeException(aClass.asClass.toType + " not supported " + typeOf[String])
-          }
-        }
+        config
+          .getAnyRef(path)
+          .asInstanceOf[A]
       } else {
         default
       }
     }
 
+    /**
+     * @param path
+     * @tparam A
+     * @return a list of elements even if it's a single element.
+     */
     def getAsList[A](path: String): List[A] = {
       config.getValue(path).valueType() match {
         case ConfigValueType.LIST => {
@@ -47,18 +67,12 @@ object ConfigHelpers {
       }
     }
 
-    def toApiHttpConfig()(implicit rootConfig: Config): HttpConfig = {
-      val cacheApiServer: Config = rootConfig.getConfig("mogobiz.cache.server.cache.api")
-      toHttpConfig(cacheApiServer)
-    }
-
-    def toJahiaHttpConfig()(implicit rootConfig: Config): HttpConfig = {
-      val cacheJahiaServer: Config = rootConfig.getConfig("mogobiz.cache.server.cache.jahia")
-      toHttpConfig(cacheJahiaServer)
-    }
-
-    private def toHttpConfig(cacheServer: Config) = {
-      HttpConfig(cacheServer.getString("protocol"), cacheServer.getString("host"), cacheServer.getInt("port"), config.getString("uri"), cacheServer.getInt("maxClient"))
+    /**
+     * @return a HttpConfig
+     */
+    def toHttpConfig(): HttpConfig = {
+      val httpServer: Config = config.getConfig("server")
+      HttpConfig(httpServer.getString("protocol"), httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), httpServer.getInt("maxClient"))
     }
   }
 
