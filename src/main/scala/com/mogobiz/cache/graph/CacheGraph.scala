@@ -22,9 +22,9 @@ object CacheGraph {
         println(s"Calling ${h.getFullUri()}")
         pipeline(Get(h.getFullUri()))
       }.toMat(Sink.ignore)(Keep.right)
-      case CacheFlow(c: EsConfig,h:HttpConfig) => Source(c.getEsPublisher()).map { hit => {
-        c.fields.flatMap(hit.fieldOpt(_))
-      }}.filter(_.length == c.fields.length).map(_.map(_.getValues.get(0).toString)).mapAsyncUnordered(h.maxClient)
+      case CacheFlow(c: EsConfig,h:HttpConfig) => Source(c.getEsIterator().toStream).map { hit => {
+        c.fields.map(hit.getOrElse(_,List()))
+      }}.filter(_.filter(!_.isEmpty).length == c.fields.length).map(_(0)).mapAsyncUnordered(h.maxClient)
       {fields =>{
         val pipeline: SendReceive = sendReceive
         println(s"Calling ${h.getFullUri(fields)}")
