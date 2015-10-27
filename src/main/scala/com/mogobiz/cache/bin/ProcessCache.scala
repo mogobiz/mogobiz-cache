@@ -8,6 +8,7 @@ import com.mogobiz.cache.enrich.NoConfig
 import com.mogobiz.cache.graph.{CacheFlow, CacheGraph}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
+import spray.http.{HttpMethods, HttpMethod, HttpRequest}
 
 import scala.collection.JavaConversions._
 import scala.concurrent.Future
@@ -70,6 +71,11 @@ object ProcessCache extends LazyLogging {
     runnablesGraphs
   }
 
+  def registerSprayHttpMethods(): Unit ={
+    HttpMethods.register(HttpMethod.custom("PURGE", true, true, false))
+    HttpMethods.register(HttpMethod.custom("BAN", true, true, false))
+  }
+
   /**
    * Run the different jobs described in the configuration file.
    *
@@ -82,6 +88,7 @@ object ProcessCache extends LazyLogging {
     } else {
       implicit val system = ActorSystem()
       implicit val _ = ActorMaterializer()
+      registerSprayHttpMethods()
       try {
         run(buildRunnablesGraphs(args(0)))
       } catch {

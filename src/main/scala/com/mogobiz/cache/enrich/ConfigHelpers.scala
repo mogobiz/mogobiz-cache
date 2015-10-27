@@ -1,6 +1,8 @@
 package com.mogobiz.cache.enrich
 
+import com.mogobiz.cache.exception.UnsupportedConfigException
 import com.typesafe.config.{Config, ConfigValueType}
+import spray.http.{HttpMethods, HttpMethod}
 
 import scala.collection.JavaConversions._
 import scala.reflect.runtime.universe._
@@ -67,7 +69,7 @@ object ConfigHelpers {
      * @return the default value if there is no path defined in the configuration file or the value at the given path.
      *         Be careful of the default value which define the type to get. The config file has to match this type.
      */
-    def getOrElse[A](path: String, default: A)(implicit tag: TypeTag[A]): A = {
+    def getOrElse[A](path: String, default: => A)(implicit tag: TypeTag[A]): A = {
       if (config.hasPath(path)) {
         config
           .getAnyRef(path)
@@ -82,6 +84,10 @@ object ConfigHelpers {
      */
     def toHttpConfig(): HttpConfig = {
       val httpServer: Config = config.getConfig("server")
+      val method: HttpMethod = HttpMethods.getForKey(config.getOrElse("method","GET").toUpperCase) match {
+        case Some(httpMethod) => httpMethod
+        case _ => throw UnsupportedConfigException(config.getString("method").toUpperCase + " HTTP method is unknown")
+      }
       val additionnalHeaders = if (config.hasPath("headers")) {
         config.getConfig("headers").entrySet().map(entry =>{
           entry.getKey -> entry.getValue.unwrapped().toString
@@ -89,7 +95,7 @@ object ConfigHelpers {
       } else {
         Map.empty[String, String]
       }
-      HttpConfig(httpServer.getString("protocol"), httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), additionnalHeaders, httpServer.getOrElse("maxClient", 10))
+      HttpConfig(httpServer.getString("protocol"), method, httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), additionnalHeaders, httpServer.getOrElse("maxClient", 10))
     }
   }
 

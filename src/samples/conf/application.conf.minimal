@@ -7,15 +7,19 @@ mogobiz.cache {
   process: [
     {
       # An input is an elastic search input. It performs a scroll and scan search. This input contains the following properties :
-      # - index (String, optional) : Default value : ${mogobiz.cache.store}.
-      # - type (String, required) : elastic search type
+      # - index (String, optional) : elastic search index.
+      #     ~> Default value : ${mogobiz.cache.store}.
+      # - type (String, required) : elastic search type.
       # - fields (String|Array of String, required) : fields to extract from the search result. Each fields will be transformed to a String
-      # - encodeFields (Boolean| Array of Boolean, optional) : Default values : true.
+      # - encodeFields (Boolean| Array of Boolean, optional) :
       #     Index of an element has to match the fields you want to encode.
       #     The size of the array can be different from the fields array size.
       #     All missing indexes will use the default values.
-      # - scroll (String, optional) : time for which the search context is opened. Default value : "1m"
-      # - size (Int, optional) : number of elements retrieved for each scroll. Default value : 100
+      #     ~> Default values : true.
+      # - scroll (String, optional) : time for which the search context is opened.
+      #     ~> Default value : "1m"
+      # - size (Int, optional) : number of elements retrieved for each scroll.
+      #     ~> Default value : 100
       # - server : describe the ES server. It contains the following properties :
       #   - protocol (String, required) : http or https
       #   - host (String, required) : domain name or ip address.
@@ -32,12 +36,15 @@ mogobiz.cache {
       },
       # An output is a HTTP GET request. This output contains the following properties:
       # - uri (String, required) : relative uri which can contains placeholders expressed as {x} where x is a number. Be careful: fields from inputs are not URI encoded while passing arguments.
+      # - method (String, optional) : Supported method : CONNECT, DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT, TRACE, PURGE, BAN.
+      #     ~> Default value : GET
       # - headers (Map[String,String], optional) : additional headers to add to the request. Eg : {"x-custom-header" : "my value"}
       # - server : describe the ES server. It contains the following properties :
       #   - protocol (String, required) : http or https
       #   - host (String, required) : domain name or ip address.
       #   - port (Int, required) : HTTP interface port number
-      #   - maxClient (Int, optional) : Number of concurrent request. Default value : 10
+      #   - maxClient (Int, optional) : Number of concurrent request.
+      #     ~> Default value : 10
       output: {
         uri: "/api/store/"${mogobiz.cache.store}"/products/{0}"
         server: {

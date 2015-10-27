@@ -44,6 +44,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/products/{0}"
+            method: "GET"
             headers:{
               "x-custom-header-1" : "my-header"
               "x-custom-header-2" : "my-header"
@@ -54,6 +55,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/products"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -63,6 +65,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/promotions"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -81,6 +84,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/brands?brandId={0}"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -90,6 +94,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/brands"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -108,6 +113,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/categories?categoryPath={0}"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -126,6 +132,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/categories?parentId={0}"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -135,6 +142,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.api.prefix}"/categories"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -159,6 +167,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}${mogobiz.cache.uri.jahia.store}"/products/{0}.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -168,6 +177,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}"/home/new-products.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -177,6 +187,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}"/home/all-promotions.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -195,6 +206,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}${mogobiz.cache.uri.jahia.store}"/brands/{0}.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -204,6 +216,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}"/home/brands.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -222,6 +235,7 @@ mogobiz.cache {
           },
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}${mogobiz.cache.uri.jahia.store}"/categories/{0}.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }
@@ -231,6 +245,7 @@ mogobiz.cache {
         {
           output: {
             uri: ${mogobiz.cache.uri.jahia.prefix}"/home/categories.html"
+            method: "GET"
             headers:{
               "x-custom-header" : "my-header"
             }

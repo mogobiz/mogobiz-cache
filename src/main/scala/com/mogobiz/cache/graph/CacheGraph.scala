@@ -9,15 +9,17 @@ import akka.stream.scaladsl._
 import com.mogobiz.cache.enrich.{CacheConfig, EsConfig, HttpConfig, NoConfig}
 import com.mogobiz.cache.exception.UnsupportedConfigException
 import com.typesafe.scalalogging.LazyLogging
+import spray.client.pipelining
 import spray.client.pipelining._
 import spray.http.HttpHeaders.RawHeader
-import spray.http.{HttpHeaders, HttpResponse}
+import spray.http._
+import spray.httpx.RequestBuilding
 
 import scala.concurrent.Future
 
 case class CacheFlow(source: CacheConfig, sink: CacheConfig)
 
-object CacheGraph extends LazyLogging {
+object CacheGraph extends LazyLogging with RequestBuilding{
 
   /**
    *
@@ -34,12 +36,9 @@ object CacheGraph extends LazyLogging {
       // Execute a get request
       case CacheFlow(_: NoConfig, h: HttpConfig) => Source.single(1).mapAsyncUnordered(h.maxClient) { i =>
         val fullUri: String = h.getFullUri()
-        logger.info(s"Requesting ${fullUri}")
-        val logRequest: RequestTransformer = { req =>
-          logger.info(req.toString)
-          req
-        }
-        pipeline(Get(fullUri) ~> addHeaders(buildHeaders(h).toList) ~> logRequest).flatMap(httpResponse => Future {
+        logger.info(s"Requesting ${h.method} ${fullUri}")
+        val request: HttpRequest = HttpRequest(h.method,fullUri,buildHeaders(h))
+        pipeline(request).flatMap(httpResponse => Future {
           (fullUri, httpResponse)
         })
       }.map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
@@ -68,8 +67,9 @@ object CacheGraph extends LazyLogging {
         }
         .mapAsyncUnordered(h.maxClient) { (fields: List[String]) => {
           val fullUri: String = h.getFullUri(fields)
-          logger.info(s"Requesting ${fullUri}")
-          pipeline(Get(fullUri) ~> addHeaders(buildHeaders(h))).flatMap(httpResponse => Future {
+          logger.info(s"Requesting ${h.method} ${fullUri}")
+          val request: HttpRequest = HttpRequest(h.method,fullUri,buildHeaders(h))
+          pipeline(request).flatMap(httpResponse => Future {
             (fullUri, httpResponse)
           })
         }

@@ -6,7 +6,7 @@ import akka.actor.ActorSystem
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.typesafe.config.{Config, ConfigFactory}
 import spray.client.pipelining._
-import spray.http.{HttpEntity, HttpResponse}
+import spray.http.{HttpMethod, HttpEntity, HttpResponse}
 
 import scala.collection.JavaConversions._
 
@@ -33,7 +33,7 @@ case class NoConfig() extends CacheConfig
  * @param uri uri to call, starting with /
  * @param maxClient specify the parallelism
  */
-case class HttpConfig(protocol: String, host: String, port: Integer, uri: String, additionalHeaders:Map[String,String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
+case class HttpConfig(protocol: String, method:HttpMethod, host: String, port: Integer, uri: String, additionalHeaders:Map[String,String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
   /**
    * @return the full uri without replacing any values inside $uri
    */

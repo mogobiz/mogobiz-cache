@@ -9,6 +9,9 @@
         </layout>
     </appender>
 
+    <logger name="com.mogobiz.cache.graph.CacheGraph$">
+        <level value="info"/>
+    </logger>
     <logger name="com.mogobiz.cache.bin.ProcessCache$">
         <level value="info"/>
     </logger>
