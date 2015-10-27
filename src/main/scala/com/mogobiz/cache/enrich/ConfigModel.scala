@@ -1,11 +1,8 @@
 package com.mogobiz.cache.enrich
 
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 import java.text.MessageFormat
 
 import akka.actor.ActorSystem
-import akka.http.scaladsl.model.headers.LinkParams.`type`
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.typesafe.config.{Config, ConfigFactory}
 import spray.client.pipelining._
