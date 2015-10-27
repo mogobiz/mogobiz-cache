@@ -1,30 +1,43 @@
 package com.mogobiz.cache.graph
 
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl._
 import com.mogobiz.cache.enrich.{CacheConfig, EsConfig, HttpConfig, NoConfig}
 import com.mogobiz.cache.exception.UnsupportedConfigException
-import com.typesafe.config.Config
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
+import spray.http.HttpResponse
 
 import scala.concurrent.Future
 
 case class CacheFlow(source: CacheConfig, sink: CacheConfig)
 
-object CacheGraph extends LazyLogging{
+object CacheGraph extends LazyLogging {
 
-  def cacheRunnableGraph(cacheFlow: CacheFlow)(implicit rootConfig: Config, actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
+  /**
+   *
+   * @param cacheFlow
+   * @param actorSystem
+   * @param actorMaterializer
+   * @return return a runnable graph base on the flow described.
+   */
+  def cacheRunnableGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
   RunnableGraph[Future[Unit]] = {
     import actorSystem.dispatcher
+    val pipeline: SendReceive = sendReceive
     cacheFlow match {
       // Execute a get request
       case CacheFlow(_: NoConfig, h: HttpConfig) => Source.single(1).mapAsyncUnordered(h.maxClient) { i =>
-        val pipeline: SendReceive = sendReceive
-        logger.info(s"Retrieving data from ${h.getFullUri()}")
-        pipeline(Get(h.getFullUri()))
-      }.toMat(Sink.ignore)(Keep.right)
+        val fullUri: String = h.getFullUri()
+        logger.info(s"Requesting ${fullUri}")
+        pipeline(Get(fullUri)).flatMap(httpResponse => Future {
+          (fullUri, httpResponse)
+        })
+      }.map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
       // Retrieve data from ES and then execute a get request using input's data.
       case CacheFlow(c: EsConfig, h: HttpConfig) => Source(c.getEsIterator().toStream).map ( hit => {
         c.fields.map(hit.getOrElse(_, List()))
@@ -41,13 +54,34 @@ object CacheGraph extends LazyLogging{
         .map{ fields =>
           fields.map(l => l(0))
         }
+        // encode fields
+        .map {fields =>
+          fields.zip(c.encodeFields).map {
+            case (f, true) => URLEncoder.encode(f,StandardCharsets.UTF_8.name())
+            case (f, _) => f
+          }
+        }
         .mapAsyncUnordered(h.maxClient) { (fields: List[String]) => {
-        val pipeline: SendReceive = sendReceive
-        logger.info(s"Retrieving data from ${h.getFullUri(fields)}")
-        pipeline(Get(h.getFullUri(fields)))
-      }
-      }.toMat(Sink.ignore)(Keep.right)
-      case c => throw UnsupportedConfigException(c.getClass.getName + " not supported")
+          val fullUri: String = h.getFullUri(fields)
+          logger.info(s"Requesting ${fullUri}")
+          pipeline(Get(fullUri)).flatMap(httpResponse => Future {
+            (fullUri, httpResponse)
+          })
+        }
+        }.map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
+      case CacheFlow(source, sink) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
     }
+  }
+
+  /**
+   * Log the response in failure state.
+   * @return the current HttpResponse.
+   */
+  def logHttpResponseFailure: PartialFunction[(String, HttpResponse), HttpResponse] = {
+    case (fullUri, httpResponse) =>
+      if (httpResponse.status.isFailure) {
+        logger.warn(s"Request ${fullUri} failed with status ${httpResponse.status}")
+      }
+      httpResponse
   }
 }

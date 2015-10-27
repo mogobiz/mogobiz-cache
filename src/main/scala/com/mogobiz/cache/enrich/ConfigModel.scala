@@ -1,8 +1,11 @@
 package com.mogobiz.cache.enrich
 
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import java.text.MessageFormat
 
 import akka.actor.ActorSystem
+import akka.http.scaladsl.model.headers.LinkParams.`type`
 import com.sksamuel.elastic4s.ElasticDsl._
 import com.typesafe.config.{Config, ConfigFactory}
 import spray.client.pipelining._
@@ -43,7 +46,7 @@ case class HttpConfig(protocol: String, host: String, port: Integer, uri: String
 
   /**
    * @param params
-   * @return the full uri with the uri interpolated with params.
+   * @return the full uri with the uri interpolated.
    */
   def getFullUri(params: List[String]): String = {
     val uriWithParams: String = MessageFormat.format(uri, params: _*)
@@ -62,11 +65,9 @@ case class HttpConfig(protocol: String, host: String, port: Integer, uri: String
  * @param `type` elastic search's type
  * @param scrollTime search context opened period
  * @param fields fields to select for each hits
- * @param maxClient specify the parallelism
  * @param batchSize number of elements to retrieve after each call.
  */
-case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String],
-                    maxClient: Integer, batchSize: Integer = 100) extends ParallelCacheConfig(maxClient) {
+case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields:List[Boolean], batchSize: Integer = 100) extends CacheConfig {
 
   /**
    * @param actorSystem

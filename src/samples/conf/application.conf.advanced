@@ -10,20 +10,20 @@ mogobiz.cache {
   server {
     es {
       protocol: "http"
-      host: "192.168.1.229"
-      port: 12200
+      host: "es.company.com"
+      port: 9200
       maxClient: 10
     },
     api {
       protocol: "http"
-      host: "mogobiz.ebiznext.com"
-      port: 12000
+      host: "mogobiz.company.com"
+      port: 80
       maxClient: 10
     },
     jahia {
       protocol: "http"
-      host: "mogobiz.ebiznext.com"
-      port: 12000
+      host: "mogobiz.company.com"
+      port: 80
       maxClient: 10
     }
   },
