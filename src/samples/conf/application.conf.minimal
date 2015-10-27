@@ -26,12 +26,13 @@ mogobiz.cache {
         scroll: "5m",
         server: {
           protocol: "http",
-          host: "192.168.1.229",
-          port: 12200
+          host: "es.company.com",
+          port: 9200
         }
       },
       # An output is a HTTP GET request. This output contains the following properties:
       # - uri (String, required) : relative uri which can contains placeholders expressed as {x} where x is a number. Be careful: fields from inputs are not URI encoded while passing arguments.
+      # - headers (Map[String,String], optional) : additional headers to add to the request. Eg : {"x-custom-header" : "my value"}
       # - server : describe the ES server. It contains the following properties :
       #   - protocol (String, required) : http or https
       #   - host (String, required) : domain name or ip address.
@@ -41,8 +42,8 @@ mogobiz.cache {
         uri: "/api/store/"${mogobiz.cache.store}"/products/{0}"
         server: {
           protocol: "http",
-          host: "mogobiz.ebiznext.com",
-          port: 12000,
+          host: "mogobiz.company.com",
+          port: 8080,
         }
       }
     }

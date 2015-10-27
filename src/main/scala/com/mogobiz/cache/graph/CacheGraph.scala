@@ -10,7 +10,8 @@ import com.mogobiz.cache.enrich.{CacheConfig, EsConfig, HttpConfig, NoConfig}
 import com.mogobiz.cache.exception.UnsupportedConfigException
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
-import spray.http.HttpResponse
+import spray.http.HttpHeaders.RawHeader
+import spray.http.{HttpHeaders, HttpResponse}
 
 import scala.concurrent.Future
 
@@ -28,13 +29,17 @@ object CacheGraph extends LazyLogging {
   def cacheRunnableGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
   RunnableGraph[Future[Unit]] = {
     import actorSystem.dispatcher
-    val pipeline: SendReceive = sendReceive
+    val pipeline = sendReceive
     cacheFlow match {
       // Execute a get request
       case CacheFlow(_: NoConfig, h: HttpConfig) => Source.single(1).mapAsyncUnordered(h.maxClient) { i =>
         val fullUri: String = h.getFullUri()
         logger.info(s"Requesting ${fullUri}")
-        pipeline(Get(fullUri)).flatMap(httpResponse => Future {
+        val logRequest: RequestTransformer = { req =>
+          logger.info(req.toString)
+          req
+        }
+        pipeline(Get(fullUri) ~> addHeaders(buildHeaders(h).toList) ~> logRequest).flatMap(httpResponse => Future {
           (fullUri, httpResponse)
         })
       }.map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
@@ -64,13 +69,17 @@ object CacheGraph extends LazyLogging {
         .mapAsyncUnordered(h.maxClient) { (fields: List[String]) => {
           val fullUri: String = h.getFullUri(fields)
           logger.info(s"Requesting ${fullUri}")
-          pipeline(Get(fullUri)).flatMap(httpResponse => Future {
+          pipeline(Get(fullUri) ~> addHeaders(buildHeaders(h))).flatMap(httpResponse => Future {
             (fullUri, httpResponse)
           })
         }
         }.map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
       case CacheFlow(source, sink) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
     }
+  }
+
+  def buildHeaders(h: HttpConfig): List[RawHeader] = {
+    h.additionalHeaders.map(h => RawHeader(h._1, h._2)).toList
   }
 
   /**

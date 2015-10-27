@@ -34,11 +34,11 @@ object ConfigHelpers {
         val booleans: List[Boolean] = config.getAsList[Boolean]("encodeFields")
         //feel the list to match at least fields size.
         if (booleans.length < fields.length) {
-          (booleans.length until fields.length).foldLeft(booleans.reverse)((list,i) => true :: list).reverse
+          (booleans.length until fields.length).foldLeft(booleans.reverse)((list, i) => true :: list).reverse
         } else {
           booleans
         }
-      }else {
+      } else {
         fields.map(f => true)
       }
       EsConfig(protocol, host, port, index, tpe, scrollTime, fields, encodeFields, esConfig.getOrElse("maxClient", 10))
@@ -59,14 +59,6 @@ object ConfigHelpers {
     }
 
     /**
-     * @return a HttpConfig
-     */
-    def toHttpConfig(): HttpConfig = {
-      val httpServer: Config = config.getConfig("server")
-      HttpConfig(httpServer.getString("protocol"), httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), httpServer.getOrElse("maxClient", 10))
-    }
-
-    /**
      *
      * @param path
      * @param default
@@ -83,6 +75,21 @@ object ConfigHelpers {
       } else {
         default
       }
+    }
+
+    /**
+     * @return a HttpConfig
+     */
+    def toHttpConfig(): HttpConfig = {
+      val httpServer: Config = config.getConfig("server")
+      val additionnalHeaders = if (config.hasPath("headers")) {
+        config.getConfig("headers").entrySet().map(entry =>{
+          entry.getKey -> entry.getValue.unwrapped().toString
+        }).toMap
+      } else {
+        Map.empty[String, String]
+      }
+      HttpConfig(httpServer.getString("protocol"), httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), additionnalHeaders, httpServer.getOrElse("maxClient", 10))
     }
   }
 
