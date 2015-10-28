@@ -8,6 +8,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl._
 import com.mogobiz.cache.enrich.{CacheConfig, EsConfig, HttpConfig, NoConfig}
 import com.mogobiz.cache.exception.UnsupportedConfigException
+import com.mogobiz.cache.utils.HeadersUtils
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining
 import spray.client.pipelining._
@@ -78,8 +79,9 @@ object CacheGraph extends LazyLogging with RequestBuilding{
     }
   }
 
-  def buildHeaders(h: HttpConfig): List[RawHeader] = {
-    h.additionalHeaders.map(h => RawHeader(h._1, h._2)).toList
+
+  def buildHeaders(h: HttpConfig): List[HttpHeader] = {
+    h.additionalHeaders.map(HeadersUtils.buildHeader).toList
   }
 
   /**
