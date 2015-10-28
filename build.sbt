@@ -39,3 +39,32 @@ libraryDependencies in ThisBuild ++= Seq(
   "org.slf4j" % "slf4j-log4j12" % slf4jLog4jV
 )
 
+mainClass in assembly := Some("com.mogobiz.cache.bin.ProcessCache")
+
+assemblyJarName in assembly := name.value + "-" + version.value + ".jar"
+
+assemblyMergeStrategy in assembly := {
+  case "application.conf" => MergeStrategy.discard
+  case "log4j.xml" => MergeStrategy.discard
+  case x =>
+    val oldStrategy = (assemblyMergeStrategy in assembly).value
+    oldStrategy(x)
+}
+
+enablePlugins(UniversalPlugin)
+
+import NativePackagerHelper._
+
+mappings in Universal <++= sourceDirectory map( src => directory(src / "samples"))
+
+mappings in Universal := {
+  // universalMappings: Seq[(File,String)]
+  val universalMappings = (mappings in Universal).value
+  val fatJar = (assembly in Compile).value
+  // removing means filtering
+  val filtered = universalMappings filter {
+    case (file, name) =>  ! name.endsWith(".jar")
+  }
+  // add the fat jar
+  filtered :+ (fatJar -> ("lib/" + fatJar.getName))
+}

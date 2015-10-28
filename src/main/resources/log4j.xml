@@ -10,7 +10,7 @@
     </appender>
 
     <logger name="com.mogobiz.cache.graph.CacheGraph$">
-        <level value="info"/>
+        <level value="WARN"/>
     </logger>
     <logger name="com.mogobiz.cache.bin.ProcessCache$">
         <level value="info"/>
