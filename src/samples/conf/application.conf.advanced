@@ -156,6 +156,16 @@ mogobiz.cache {
       store: "/JCF_store-acmesport"
       process: [
         {
+          output: {
+            uri: ${mogobiz.cache.uri.jahia.prefix}"/home.html"
+            method: "GET"
+            headers:{
+              "x-custom-header" : "my-header"
+            }
+            server: ${mogobiz.cache.server.jahia}
+          }
+        },
+        {
           input: {
             index: ${mogobiz.cache.store}
             type: "product"
