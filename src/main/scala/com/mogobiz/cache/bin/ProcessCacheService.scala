@@ -53,7 +53,7 @@ object ProcessCacheService extends LazyLogging {
 
   /**
    *
-   * @param configs
+   * @param config
    * @param system
    * @param actorMaterializer
    * @return runnables graphs built from the configuration file.
@@ -62,8 +62,8 @@ object ProcessCacheService extends LazyLogging {
    *         If no input is found, a NoConfig is created else an EsConfig.
    *         An output is of type HttpConfig
    */
-  private def buildRunnablesGraphs(configs :List[Config], purgeConfig:Config)(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
-    val purgeHttpConfig: HttpConfig = purgeConfig.toHttpConfig()
+  private def buildRunnablesGraphs(config :Config)(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
+    val purgeHttpConfig: HttpConfig = config.getConfig(genericPurge).toHttpConfig()
     def buildRunnableGraphs(config:Config)={
       implicit val configImpl = config
       config.getConfigList(genericProcessCache).filter(aConfig => aConfig.hasPath("input") || aConfig.hasPath("output")).map(aConfig => {
@@ -72,9 +72,9 @@ object ProcessCacheService extends LazyLogging {
         CacheFlow(source, sink, purgeHttpConfig)
       }).map(CacheGraph.cacheRunnableGraph).toList
     }
-    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = configs.flatMap(c => buildRunnableGraphs(c))
+    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(config)
     logger.info(s"Built ${runnablesGraphs.length} runnables graphs")
-    if(purgeConfig.getString("uri") == "{0}")
+    if(purgeHttpConfig.uri == "{0}")
       runnablesGraphs
     else
       CacheGraph.cacheRunnableGraph(CacheFlow(NoConfig(),NoConfig(),purgeHttpConfig)) :: runnablesGraphs
@@ -106,13 +106,13 @@ object ProcessCacheService extends LazyLogging {
   }
 
   private def buildStaticUrlsConfig(staticUrls:List[String]) = {
-    val staticUrlsConfigAsString = staticUrls.map(l => {
-      s"""{output: {
+    staticUrls.map(l => {
+      s"""mogobiz.cache.uri.generic.process += {output: {
         uri: ${l}
         server: $${mogobiz.cache.server.api}
       }}""".stripMargin
-    }).mkString("mogobiz.cache.uri.generic.process:[",",","]")
-    ConfigFactory.parseString(staticUrlsConfigAsString)
+    }).map(s => ConfigFactory.parseString(s))
+      .reduce((c1,c2) => c2.withFallback(c1))
   }
 
   def run(apiPrefix:String, apiStore:String, frontPrefix:String, frontStore:String, staticUrls:List[String]){
@@ -121,11 +121,11 @@ object ProcessCacheService extends LazyLogging {
     implicit val _ = ActorMaterializer()
     registerSprayHttpMethods()
     try {
-      val storeAndPrefixConfig: Config = buildStoreAndPrefixConfig(apiPrefix, apiStore, frontPrefix, frontStore)
-      val genericConfig = storeAndPrefixConfig.withFallback(ConfigFactory.parseResources("application.conf")).resolve()
-      val staticUrlsConfig = storeAndPrefixConfig.withFallback(buildStaticUrlsConfig(staticUrls)).withFallback(ConfigFactory.parseResources("application.conf")).resolve()
-      val purgeConfig = ConfigFactory.load().getConfig(genericPurge)
-      run(buildRunnablesGraphs(List(genericConfig, staticUrlsConfig), purgeConfig))
+      val config = buildStoreAndPrefixConfig(apiPrefix, apiStore, frontPrefix, frontStore)
+        .withFallback(buildStaticUrlsConfig(staticUrls))
+        .withFallback(ConfigFactory.parseResources("application.conf"))
+        .resolve()
+      run(buildRunnablesGraphs(config))
     } catch {
       case e: Throwable => {
         logger.error(e.getMessage, e)
