@@ -1,50 +1,54 @@
 package com.mogobiz.cache.enrich
 
 import java.text.MessageFormat
+import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
-import com.sksamuel.elastic4s.ElasticDsl._
+import com.mogobiz.cache.utils.CustomSslConfiguration
 import com.typesafe.config.{Config, ConfigFactory}
+import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
-import spray.http.{HttpMethod, HttpEntity, HttpResponse}
+import spray.http.{HttpEntity, HttpMethod, HttpResponse}
 
 import scala.collection.JavaConversions._
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Awaitable, Future}
 
 /**
- * Root type of all configs related to mogobiz-cache.
- */
+  * Root type of all configs related to mogobiz-cache.
+  */
 abstract class CacheConfig()
 
 /**
- * @param maxClient specify the parallelism
- */
+  * @param maxClient specify the parallelism
+  */
 abstract class ParallelCacheConfig(maxClient: Integer) extends CacheConfig
 
 /**
- * No config found for an input. Having an output with NoConfig is currently impossible.
- */
+  * No config found for an input. Having an output with NoConfig is currently impossible.
+  */
 case class NoConfig() extends CacheConfig
 
 /**
- *
- * @param protocol http or https
- * @param host domain name or ip address
- * @param port port, no default value is provided
- * @param uri uri to call, starting with /
- * @param maxClient specify the parallelism
- */
-case class HttpConfig(protocol: String, method:HttpMethod, host: String, port: Integer, uri: String, additionalHeaders:Map[String,String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
+  *
+  * @param protocol  http or https
+  * @param host      domain name or ip address
+  * @param port      port, no default value is provided
+  * @param uri       uri to call, starting with /
+  * @param maxClient specify the parallelism
+  */
+case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: Integer, uri: String, additionalHeaders: Map[String, String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
   /**
-   * @return the full uri without replacing any values inside $uri
-   */
+    * @return the full uri without replacing any values inside $uri
+    */
   def getFullUri(): String = {
     s"${protocol}://${host}:${port}${uri}"
   }
 
   /**
-   * @param params
-   * @return the full uri with the uri interpolated.
-   */
+    * @param params
+    * @return the full uri with the uri interpolated.
+    */
   def getFullUri(params: List[String]): String = {
     val uriWithParams: String = MessageFormat.format(uri, params: _*)
     s"${protocol}://${host}:${port}${uriWithParams}"
@@ -52,44 +56,49 @@ case class HttpConfig(protocol: String, method:HttpMethod, host: String, port: I
 }
 
 /**
- * ScrollTime and batchSize are somehow related. In fact the more element we get, the less call we do to elastic search and higher the scrollTime is.
- * Each batch extend the search context.
- *
- * @param protocol http or https
- * @param host domain name or ip address
- * @param port port, no default value is provided
- * @param index elastic search's index
- * @param `type` elastic search's type
- * @param scrollTime search context opened period
- * @param fields fields to select for each hits
- * @param batchSize number of elements to retrieve after each call.
- */
-case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields:List[Boolean], batchSize: Integer = 100) extends CacheConfig {
+  * ScrollTime and batchSize are somehow related. In fact the more element we get, the less call we do to elastic search and higher the scrollTime is.
+  * Each batch extend the search context.
+  *
+  * @param protocol   http or https
+  * @param host       domain name or ip address
+  * @param port       port, no default value is provided
+  * @param index      elastic search's index
+  * @param `type`     elastic search's type
+  * @param scrollTime search context opened period
+  * @param fields     fields to select for each hits
+  * @param batchSize  number of elements to retrieve after each call.
+  */
+case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields: List[Boolean], batchSize: Integer = 100) extends CacheConfig with LazyLogging {
 
   /**
-   * @param actorSystem
-   * @return custom iterator that scroll and scan elements from elastic search. Each element is a Map containing all fields requested that are available for each hits. That means a map.length can be different from fields.length.
-   */
+    * @param actorSystem
+    * @return custom iterator that scroll and scan elements from elastic search. Each element is a Map containing all fields requested that are available for each hits. That means a map.length can be different from fields.length.
+    */
   def getEsIterator()(implicit actorSystem: ActorSystem): Iterator[Map[String, List[String]]] = {
     class EsIterator()(implicit actorSystem: ActorSystem) extends Iterator[Map[String, List[String]]] {
 
       import actorSystem.dispatcher
+      import ConfigHelpers._
+      val timeout = ConfigFactory.load().getOrElse("mogobiz.cache.timeout", 30).toLong
 
-      implicit val pipeline: SendReceive = sendReceive
-
+      val pipeline = CustomSslConfiguration.getPipeline(host, port, protocol.toLowerCase == "https")
       /**
-       * Initial scrollId by asking elastic search to scan and scroll. No hits are returned by this request.
-       */
+        * Initial scrollId by asking elastic search to scan and scroll. No hits are returned by this request.
+        */
       private[this] var scrollId = {
         val fieldsRequested: String = fields.mkString(",")
         val urlScanScroll: String = s"${protocol}://${host}:${port}/${index}/${`type`}/_search?scroll=${scrollTime}&search_type=scan&fields=${fieldsRequested}&size=${batchSize}"
-        val response: HttpResponse = pipeline(Get(urlScanScroll)).await
+        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(Get(urlScanScroll)))
+        val response: HttpResponse = getFuture(httpResponseF)
+        if(response.status.isFailure){
+          logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index}")
+        }
         ConfigFactory.parseString(response.entity.asString).getString("_scroll_id")
       }
 
       /**
-       * Iterator of the different hits.
-       */
+        * Iterator of the different hits.
+        */
       private[this] var dataIterator: Iterator[Map[String, List[String]]] = scrollData()
 
       override def hasNext: Boolean = {
@@ -103,10 +112,11 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
       }
 
       /**
-       * @return an iterator of the different hits. Call ES with scroll_id and build a map containing the fields.
-       */
+        * @return an iterator of the different hits. Call ES with scroll_id and build a map containing the fields.
+        */
       private def scrollData(): Iterator[Map[String, List[String]]] = {
-        val response: HttpResponse = pipeline(Post(s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}").withEntity(HttpEntity(scrollId))).await
+        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(Post(s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}").withEntity(HttpEntity(scrollId))))
+        val response: HttpResponse = getFuture(httpResponseF)
         val config: Config = ConfigFactory.parseString(response.entity.asString)
         scrollId = config.getString("_scroll_id")
         val hits = config.getConfigList("hits.hits")
@@ -128,6 +138,10 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
       }
 
       override def next(): Map[String, List[String]] = dataIterator.next()
+
+      private def getFuture[T](awaitable: Awaitable[T]) = {
+        Await.result(awaitable, Duration(timeout, TimeUnit.SECONDS))
+      }
     }
     new EsIterator()
   }
