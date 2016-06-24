@@ -1,5 +1,6 @@
 package com.mogobiz.cache.bin
 
+import com.mogobiz.cache.service.ProcessCacheService
 import com.typesafe.scalalogging.LazyLogging
 
 /**
