@@ -8,7 +8,7 @@ import com.mogobiz.cache.utils.CustomSslConfiguration
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
-import spray.http.{HttpEntity, HttpMethod, HttpResponse}
+import spray.http.{BasicHttpCredentials, HttpEntity, HttpMethod, HttpResponse}
 
 import scala.collection.JavaConversions._
 import scala.concurrent.duration.Duration
@@ -68,7 +68,7 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
   * @param fields     fields to select for each hits
   * @param batchSize  number of elements to retrieve after each call.
   */
-case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields: List[Boolean], batchSize: Integer = 100) extends CacheConfig with LazyLogging {
+case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields: List[Boolean], searchGuardConfig: SearchGuardConfig, batchSize: Integer = 100) extends CacheConfig with LazyLogging {
 
   /**
     * @param actorSystem
@@ -79,6 +79,7 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
 
       import actorSystem.dispatcher
       import ConfigHelpers._
+
       val timeout = ConfigFactory.load().getOrElse("mogobiz.cache.timeout", 30).toLong
 
       val pipeline = CustomSslConfiguration.getPipeline(host, port, protocol.toLowerCase == "https")
@@ -88,9 +89,14 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
       private[this] var scrollId = {
         val fieldsRequested: String = fields.mkString(",")
         val urlScanScroll: String = s"${protocol}://${host}:${port}/${index}/${`type`}/_search?scroll=${scrollTime}&search_type=scan&fields=${fieldsRequested}&size=${batchSize}"
-        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(Get(urlScanScroll)))
+        val scanScrollHttpRequest = if (searchGuardConfig.active) {
+          Get(urlScanScroll) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password))
+        } else {
+          Get(urlScanScroll)
+        }
+        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
         val response: HttpResponse = getFuture(httpResponseF)
-        if(response.status.isFailure){
+        if (response.status.isFailure) {
           logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index}")
         }
         ConfigFactory.parseString(response.entity.asString).getString("_scroll_id")
@@ -115,7 +121,13 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         * @return an iterator of the different hits. Call ES with scroll_id and build a map containing the fields.
         */
       private def scrollData(): Iterator[Map[String, List[String]]] = {
-        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(Post(s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}").withEntity(HttpEntity(scrollId))))
+        val urlScanScroll = s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}"
+        val scanScrollHttpRequest = if (searchGuardConfig.active) {
+          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password))
+        } else {
+          Post(urlScanScroll).withEntity(HttpEntity(scrollId))
+        }
+        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
         val response: HttpResponse = getFuture(httpResponseF)
         val config: Config = ConfigFactory.parseString(response.entity.asString)
         scrollId = config.getString("_scroll_id")
@@ -147,3 +159,11 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
   }
 
 }
+
+/**
+  *
+  * @param active indicate that search guard is enabled
+  * @param username
+  * @param password
+  */
+final case class SearchGuardConfig(active: Boolean = false, username: String = "", password: String = "")
