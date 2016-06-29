@@ -49,20 +49,36 @@ assemblyMergeStrategy in assembly := {
     oldStrategy(x)
 }
 
-enablePlugins(UniversalPlugin)
+isSnapshot in ThisBuild := version.value.trim.endsWith("SNAPSHOT")
 
-import NativePackagerHelper._
-
-mappings in Universal <++= sourceDirectory map( src => directory(src / "samples"))
-
-mappings in Universal := {
-  // universalMappings: Seq[(File,String)]
-  val universalMappings = (mappings in Universal).value
-  val fatJar = (assembly in Compile).value
-  // removing means filtering
-  val filtered = universalMappings filter {
-    case (file, name) =>  ! name.endsWith(".jar")
-  }
-  // add the fat jar
-  filtered :+ (fatJar -> ("lib/" + fatJar.getName))
+publishTo in ThisBuild := {
+  val artifactory = "http://art.ebiznext.com/artifactory/"
+  if (isSnapshot.value)
+    Some("snapshots" at artifactory + "libs-snapshot-local")
+  else
+    Some("releases" at artifactory + "libs-release-local")
 }
+
+credentials in ThisBuild += Credentials(Path.userHome / ".ivy2" / ".credentials")
+
+publishArtifact in(ThisBuild, Compile, packageSrc) := false
+
+publishArtifact in(ThisBuild, Test, packageSrc) := false
+
+publishMavenStyle in ThisBuild := true
+
+publishArtifact in (ThisBuild, Test) := false
+
+pomIncludeRepository := { _ => false }
+
+publish <<= publish dependsOn assembly
+
+publishM2 <<= publishM2 dependsOn assembly
+
+publishLocal <<= publishLocal dependsOn assembly
+
+val packageStandalone = taskKey[File]("package-standalone")
+
+packageStandalone := (baseDirectory in Compile).value / "target" / "scala-2.11" / (name.value + "-" + version.value + ".jar")
+
+addArtifact( Artifact("mogobiz-cache", "standalone"), packageStandalone )
