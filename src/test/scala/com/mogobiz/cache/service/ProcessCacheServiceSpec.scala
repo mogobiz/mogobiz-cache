@@ -3,7 +3,7 @@ package com.mogobiz.cache.service
 import com.typesafe.config.{Config, ConfigFactory}
 import org.scalatest.{FunSpec, PrivateMethodTester}
 
-class ProcessCacheServiceSpec extends BuildStaticUrlsConfigSpec
+class ProcessCacheServiceSpec extends BuildStaticUrlsConfigSpec with BuildStoreAndPrefixConfig
 
 trait BuildStaticUrlsConfigSpec extends FunSpec with PrivateMethodTester {
   describe("buildStaticUrlsConfig") {
@@ -41,7 +41,7 @@ trait BuildStaticUrlsConfigSpec extends FunSpec with PrivateMethodTester {
       }
     }
 
-    describe("with a list of two static url"){
+    describe("with a list of two static url") {
       it("should append two element to the list mogobiz.cache.uri.generic.process in the same order as they have been declared") {
         val buildStaticUrlsConfig = PrivateMethod[Config]('buildStaticUrlsConfig)
         val url1 = "url1"
@@ -64,5 +64,30 @@ trait BuildStaticUrlsConfigSpec extends FunSpec with PrivateMethodTester {
   def checkHttpConfig(httpConfig: Config, server: String, uri: String): Unit = {
     assert(httpConfig.getString("output.server") === server, "The server failed to be substitued")
     assert(httpConfig.getString("output.uri") === uri, "The uri failed to be substitued")
+  }
+}
+
+trait BuildStoreAndPrefixConfig extends FunSpec with PrivateMethodTester {
+  describe("buildStoreAndPrefixConfig") {
+    describe("with empty string parameters") {
+      it("should return a config with empty parameters") {
+        val buildStoreAndPrefixConfig = PrivateMethod[Config]('buildStoreAndPrefixConfig)
+        val config: Config = ProcessCacheService invokePrivate buildStoreAndPrefixConfig("", "", "", "")
+        assert(config.getString("mogobiz.cache.uri.generic.apiPrefix") === "")
+        assert(config.getString("mogobiz.cache.uri.generic.apiStore") === "")
+        assert(config.getString("mogobiz.cache.uri.generic.frontPrefix") === "")
+        assert(config.getString("mogobiz.cache.uri.generic.frontStore") === "")
+      }
+    }
+    describe("with not empty string parameters") {
+      it("should return a config with not empty parameters") {
+        val buildStoreAndPrefixConfig = PrivateMethod[Config]('buildStoreAndPrefixConfig)
+        val config: Config = ProcessCacheService invokePrivate buildStoreAndPrefixConfig("apiPrefix", "apiStore", "frontPrefix", "frontStore")
+        assert(config.getString("mogobiz.cache.uri.generic.apiPrefix") === "apiPrefix")
+        assert(config.getString("mogobiz.cache.uri.generic.apiStore") === "apiStore")
+        assert(config.getString("mogobiz.cache.uri.generic.frontPrefix") === "frontPrefix")
+        assert(config.getString("mogobiz.cache.uri.generic.frontStore") === "frontStore")
+      }
+    }
   }
 }
