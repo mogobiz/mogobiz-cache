@@ -3,6 +3,7 @@ package com.mogobiz.cache.enrich
 import java.net.URL
 
 import com.mogobiz.cache.exception.UnsupportedConfigException
+import com.mogobiz.cache.utils.UrlUtils
 import com.typesafe.config.{Config, ConfigFactory, ConfigValueType}
 import com.typesafe.scalalogging.LazyLogging
 import spray.http.{HttpMethod, HttpMethods}
@@ -146,24 +147,9 @@ object ConfigHelpers extends LazyLogging {
     */
   private def getEsTypesFieldsAndFiltersFromUrl(url: String): Option[(String, Map[String, List[(String, String)]])] = {
     def getEsTypesFieldsAndFiltersFromUrl() = {
-      val variables: Regex = "\\Q${\\E(.*?)\\Q}\\E".r
       Try {
-        variables.findAllMatchIn(url)
-          .map(matching => matching.subgroups(0))
-          .map(subGroupMatching => {
-            val (indice, fieldAndFilter) = subGroupMatching.span(_ != '.')
-            val (field, filter) = if (fieldAndFilter.isEmpty) ("", "") else fieldAndFilter.tail.span(_ != '|')
-            val (indiceTrimmed, fieldTrimmed, filterTrimmed) = (indice.trim, field.trim, if (filter.isEmpty) "" else filter.tail.trim)
-            if (fieldTrimmed.isEmpty) {
-              throw new IllegalArgumentException("The variable doesn't have any field " + subGroupMatching)
-            } else {
-              filterTrimmed match {
-                case filter if filter.isEmpty => (indiceTrimmed, fieldTrimmed, filterTrimmed)
-                case "encode" => (indiceTrimmed, fieldTrimmed, filterTrimmed)
-                case f => throw new IllegalArgumentException(s"The filter ${f} doesn't exist")
-              }
-            }
-          }).toList.groupBy(_._1).mapValues(_.map(t => (t._2, t._3)))
+        UrlUtils.extractUriIndicesVariablesNameAndFilter(url)
+          .groupBy(_._1).mapValues(_.map(t => (t._2, t._3)))
       }
     }
     getEsTypesFieldsAndFiltersFromUrl() match {
@@ -208,7 +194,7 @@ object ConfigHelpers extends LazyLogging {
         }
         .flatMap { case (url, esTypesFieldsAndFilters) => {
           Try {
-            new URL(url)
+            new URL(UrlUtils.stripSpaceAndFiltersInVariable(url))
           } match {
             case Success(validUrl) => {
               // We handle only one indice at the moment

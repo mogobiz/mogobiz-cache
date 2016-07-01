@@ -20,6 +20,8 @@ import scala.util.{Failure, Success}
   */
 object ProcessCacheService extends LazyLogging {
 
+  var errorEncountered = false
+
   val genericProcessCache = "mogobiz.cache.uri.generic.process"
   val genericPurge = "mogobiz.cache.uri.generic.purge"
 
@@ -40,6 +42,9 @@ object ProcessCacheService extends LazyLogging {
             case _ => {
               system.shutdown()
               logger.info(s"Successfully run ${runnableGraphs.length} jobs")
+              if(errorEncountered){
+                logger.info("Still, some errors have been encountered. Please check logs to have more details.")
+              }
             }
           }
         }
@@ -118,6 +123,7 @@ object ProcessCacheService extends LazyLogging {
     val decider:Supervision.Decider = {
       case e:IllegalUriException => {
         logger.error(e.getMessage)
+        errorEncountered = true
         Supervision.resume
       }
       case _ => Supervision.stop

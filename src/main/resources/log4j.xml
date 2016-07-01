@@ -17,13 +17,22 @@
         </layout>
     </appender>
 
-    <logger name="com.mogobiz.cache.graph.CacheGraph$">
-        <level value="INFO"/>
-    </logger>
-    <logger name="com.mogobiz.cache.bin.ProcessCache$">
-        <level value="INFO"/>
-    </logger>
-    <logger name="com.mogobiz.cache.bin.ProcessCacheService$">
+    <!--<logger name="com.mogobiz.cache.graph.CacheGraph$">-->
+        <!--<level value="INFO"/>-->
+    <!--</logger>-->
+    <!--<logger name="com.mogobiz.cache.bin.ProcessCache$">-->
+        <!--<level value="INFO"/>-->
+    <!--</logger>-->
+    <!--<logger name="com.mogobiz.cache.service.ProcessCacheService$">-->
+        <!--<level value="INFO"/>-->
+    <!--</logger>-->
+    <!--<logger name="com.mogobiz.cache.enrich.ConfigHelpers$">-->
+        <!--<level value = "INFO"/>-->
+    <!--</logger>-->
+    <!--<logger name="com.mogobiz.cache.enrich.ConfigModel">-->
+    <!--<level value = "INFO"/>-->
+    <!--</logger>-->
+    <logger name="com.mogobiz.cache">
         <level value="INFO"/>
     </logger>
 

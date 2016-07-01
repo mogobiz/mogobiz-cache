@@ -3,7 +3,7 @@ package com.mogobiz.cache.enrich
 import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
-import com.mogobiz.cache.utils.CustomSslConfiguration
+import com.mogobiz.cache.utils.{CustomSslConfiguration, UrlUtils}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
@@ -12,7 +12,6 @@ import spray.http.{BasicHttpCredentials, HttpEntity, HttpMethod, HttpResponse}
 import scala.collection.JavaConversions._
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Awaitable, Future}
-import scala.util.matching.Regex
 
 /**
   * Root type of all configs related to mogobiz-cache.
@@ -44,30 +43,9 @@ case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[S
   */
 case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: Integer, uri: String, additionalHeaders: Map[String, String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
 
-  val extractVariables = "\\Q${\\E(.*?)\\Q}\\E"
-  val extractVariablesRegex: Regex = extractVariables.r
-  val uriStringContext = uriAsStringContext(uri)
-  val uriVariables = extractUriVariables(uri)
 
-  /**
-    *
-    * @return StringContext of the URI.
-    */
-  private def uriAsStringContext(uri:String): StringContext ={
-    val allStaticString: List[String] = uri.split(extractVariables).toList
-    val stringForStringContext = (extractVariables + "$").r.findFirstIn(uri) match {
-      case Some(_) => ("" :: allStaticString.reverse).reverse
-      case _ => allStaticString
-    }
-    new StringContext(stringForStringContext:_*)
-  }
-
-  /**
-    * @return the list of all variables inside the url.
-    */
-  private def extractUriVariables(uri:String): List[String] ={
-    extractVariablesRegex.findAllMatchIn(uri).map(m => m.subgroups(0)).toList
-  }
+  val uriStringContext = UrlUtils.uriAsStringContext(uri)
+  val uriVariables = UrlUtils.extractUriVariablesName(uri)
 
   /**
     * @return the full uri without replacing any values inside $uri
