@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets
 import akka.actor.ActorSystem
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Source, _}
-import com.mogobiz.cache.enrich.{CacheConfig, EsConfig, HttpConfig, NoConfig}
+import com.mogobiz.cache.enrich._
 import com.mogobiz.cache.exception.UnsupportedConfigException
 import com.mogobiz.cache.utils.{CustomSslConfiguration, HeadersUtils}
 import com.typesafe.scalalogging.LazyLogging
@@ -29,38 +29,56 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     * @param actorMaterializer
     * @return an akka stream source
     */
-  def buildSource(cacheConfig: CacheConfig)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer): Source[List[String], Unit] = {
+  def buildSource(cacheConfig: CacheConfig)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer): Source[Map[String, String], Unit] = {
     cacheConfig match {
       // Build a list of one element
-      case _: NoConfig => Source.single(List())
+      case _: NoConfig => Source.single(Map())
       // Build Es Source
       case c: EsConfig => {
         Source(c.getEsIterator().toStream)
           .map(hit => {
-            c.fields.map(hit.getOrElse(_, List()))
+            c.fields.map(f => {
+              (s"${c.`type`}.${f}", hit.getOrElse(f, List()))
+            })
           })
           //remove all the hits that doesn't have all fields
-          .filter { fields =>
-          val result: Boolean = fields.filter(!_.isEmpty).length == c.fields.length
-          if (!result) {
-            logger.warn("One hit doesn't have all required fields")
+          .filter { fieldsPathsAndValues =>
+            val result: Boolean = fieldsPathsAndValues.count{
+              case (fieldPath, values) => !values.isEmpty
+            } == c.fields.length
+            if (!result) {
+              logger.warn("One hit doesn't have all required fields")
+            }
+            result
           }
-          result
-        }
           // currently keep the first value in case where a field has multiple value.
-          .map { fields =>
-          fields.map(l => l(0))
-        }
-          // encode fields
-          .map { fields =>
-          fields.zip(c.encodeFields).map {
-            case (f, true) => URLEncoder.encode(f, StandardCharsets.UTF_8.name())
-            case (f, _) => f
+          .map { fieldsPathsAndValues =>
+            fieldsPathsAndValues.map{
+              case (fieldPath, values) => (fieldPath, values(0))
+            }
           }
+          // encode fields
+          .map { fieldsPathsAndValues =>
+          fieldsPathsAndValues.zip(c.encodeFields).map {
+            case ((fieldPath, value), true) => fieldPath -> URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+            case ((fieldPath, value), _) => fieldPath -> value
+          }.toMap
         }
       }
     }
   }
+
+//  private def escapeVariablesForConfig(url: String): String = {
+//    val wrappAllVariables: String = url.replaceAll("(\\Q${\\E.*?\\Q}\\E)", "\"$1\"")
+//    val fixHead = "^\\Q${\\E.*?\\Q}\\E".r.findFirstIn(url) match {
+//      case Some(_) => wrappAllVariables.tail
+//      case _ => "\"" + wrappAllVariables
+//    }
+//    "\\Q${\\E.*?\\Q}\\E$".r.findFirstIn(url) match {
+//      case Some(_) => fixHead.reverse.tail.reverse
+//      case _ => fixHead + "\""
+//    }
+//  }
 
   /**
     *
@@ -71,7 +89,7 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     */
   def buildRequestInfoFlow(cacheConfig: CacheConfig)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) = {
     cacheConfig match {
-      case c: HttpConfig => Flow[List[String]].map { (fields: List[String]) => {
+      case c: HttpConfig => Flow[Map[String,String]].map { (fields: Map[String,String]) => {
         val fullUri: String = c.getFullUri(fields)
         logger.info(s"Building uri ${fullUri}")
         FlowItem(fullUri, None)
@@ -112,11 +130,14 @@ object CacheGraph extends LazyLogging with RequestBuilding {
   RunnableGraph[Future[Unit]] = {
     import actorSystem.dispatcher
     cacheFlow match {
-      case CacheFlow(s: CacheConfig, h: CacheConfig, p: HttpConfig) => {
-        val pipeline = CustomSslConfiguration.getPipeline(p.host, p.port, p.protocol.toLowerCase == "https")
-        val source: Source[List[String], Unit] = buildSource(s)
+      case CacheFlow(s: CacheConfig, h: HttpConfig, p: PurgeConfig) => {
+        val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
+        val source: Source[Map[String,String], Unit] = buildSource(s)
         val requestFlow = buildRequestInfoFlow(h)
-        val purgeHttpCallFlow = if (p.uri == "{0}") buildHttpCallFlow(p, pipeline) else Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
+        val purgeHttpCallFlow = if (p.uri == "{0}") {
+          val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
+          buildHttpCallFlow(purgeHttpConfig, pipeline)
+        } else Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
         val cacheHttpCallFlow = buildHttpCallFlow(h, pipeline)
         source.via(requestFlow).via(purgeHttpCallFlow).map(logHttpResponseFailure).via(cacheHttpCallFlow).map(logHttpResponseFailure).toMat(Sink.ignore)(Keep.right)
       }

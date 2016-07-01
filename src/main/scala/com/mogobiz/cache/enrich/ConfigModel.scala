@@ -1,6 +1,5 @@
 package com.mogobiz.cache.enrich
 
-import java.text.MessageFormat
 import java.util.concurrent.TimeUnit
 
 import akka.actor.ActorSystem
@@ -13,6 +12,7 @@ import spray.http.{BasicHttpCredentials, HttpEntity, HttpMethod, HttpResponse}
 import scala.collection.JavaConversions._
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Awaitable, Future}
+import scala.util.matching.Regex
 
 /**
   * Root type of all configs related to mogobiz-cache.
@@ -31,6 +31,11 @@ case class NoConfig() extends CacheConfig
 
 /**
   *
+  * @param uri       uri to call, starting with /
+  */
+case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[String, String]) extends CacheConfig
+/**
+  *
   * @param protocol  http or https
   * @param host      domain name or ip address
   * @param port      port, no default value is provided
@@ -38,6 +43,32 @@ case class NoConfig() extends CacheConfig
   * @param maxClient specify the parallelism
   */
 case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: Integer, uri: String, additionalHeaders: Map[String, String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
+
+  val extractVariables = "\\Q${\\E(.*?)\\Q}\\E"
+  val extractVariablesRegex: Regex = extractVariables.r
+  val uriStringContext = uriAsStringContext(uri)
+  val uriVariables = extractUriVariables(uri)
+
+  /**
+    *
+    * @return StringContext of the URI.
+    */
+  private def uriAsStringContext(uri:String): StringContext ={
+    val allStaticString: List[String] = uri.split(extractVariables).toList
+    val stringForStringContext = (extractVariables + "$").r.findFirstIn(uri) match {
+      case Some(_) => ("" :: allStaticString.reverse).reverse
+      case _ => allStaticString
+    }
+    new StringContext(stringForStringContext:_*)
+  }
+
+  /**
+    * @return the list of all variables inside the url.
+    */
+  private def extractUriVariables(uri:String): List[String] ={
+    extractVariablesRegex.findAllMatchIn(uri).map(m => m.subgroups(0)).toList
+  }
+
   /**
     * @return the full uri without replacing any values inside $uri
     */
@@ -49,8 +80,10 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
     * @param params
     * @return the full uri with the uri interpolated.
     */
-  def getFullUri(params: List[String]): String = {
-    val uriWithParams: String = MessageFormat.format(uri, params: _*)
+  def getFullUri(params: Map[String,String]): String = {
+    //val uriWithParams: String = MessageFormat.format(uri, params: _*)
+    val values: List[String] = uriVariables.map(v => params.getOrElse(v,""))
+    val uriWithParams: String = uriStringContext.s(values:_*)
     s"${protocol}://${host}:${port}${uriWithParams}"
   }
 }
@@ -77,8 +110,8 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
   def getEsIterator()(implicit actorSystem: ActorSystem): Iterator[Map[String, List[String]]] = {
     class EsIterator()(implicit actorSystem: ActorSystem) extends Iterator[Map[String, List[String]]] {
 
-      import actorSystem.dispatcher
       import ConfigHelpers._
+      import actorSystem.dispatcher
 
       val timeout = ConfigFactory.load().getOrElse("mogobiz.cache.timeout", 30).toLong
 
@@ -137,8 +170,9 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
           if (c.hasPath("fields")) {
             val fieldsConfig: Config = c.getConfig("fields")
             fields.flatMap(f => {
-              if (fieldsConfig.hasPath(f)) {
-                Some(f -> fieldsConfig.getAsList[AnyRef](f).map(_.toString))
+              val quotedField = "\"" + f + "\""
+              if (fieldsConfig.hasPath(quotedField)) {
+                Some(f -> fieldsConfig.getAsList[AnyRef](quotedField).map(_.toString))
               } else {
                 None
               }

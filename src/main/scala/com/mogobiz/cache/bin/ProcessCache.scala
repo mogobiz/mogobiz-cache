@@ -15,11 +15,11 @@ object ProcessCache extends LazyLogging {
    * @param args need the config process path defined in an application.conf { @see src/samples/conf/}
    */
   def main(args: Array[String]) {
-    if (args.length < 4) {
-      logger.error(s"USAGE : ProcessCache <apiPrefix> <apiStore> <frontPrefix> <frontStore> <staticUrl:StaticUrl...>")
+    if (args.length < 2) {
+      logger.error(s"USAGE : ProcessCache <apiStore> <staticUrl1> <staticUrl2> ... <staticUrlN>")
       System.exit(-1)
     } else {
-      ProcessCacheService.run(args(0), args(1), args(2), args(3), args(4).split(":").toList)
+      ProcessCacheService.run(args(0), args.toList.tail)
     }
   }
 }

@@ -1,14 +1,14 @@
 package com.mogobiz.cache.service
 
 import akka.actor.ActorSystem
-import akka.stream.ActorMaterializer
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import akka.stream.scaladsl.RunnableGraph
 import com.mogobiz.cache.enrich.ConfigHelpers._
-import com.mogobiz.cache.enrich.{HttpConfig, NoConfig}
+import com.mogobiz.cache.enrich.{HttpConfig, NoConfig, PurgeConfig}
 import com.mogobiz.cache.graph.{CacheFlow, CacheGraph}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
-import spray.http.{HttpMethod, HttpMethods}
+import spray.http.{HttpMethod, HttpMethods, IllegalUriException}
 
 import scala.collection.JavaConversions._
 import scala.concurrent.Future
@@ -65,7 +65,7 @@ object ProcessCacheService extends LazyLogging {
     *         An output is of type HttpConfig
     */
   private def buildRunnablesGraphs(config: Config)(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
-    val purgeHttpConfig: HttpConfig = config.getConfig(genericPurge).toHttpConfig()
+    val purgeHttpConfig: PurgeConfig = config.getConfig(genericPurge).toPurgeConfig()
     def buildRunnableGraphs(config: Config) = {
       implicit val configImpl = config
       config.getConfigList(genericProcessCache).filter(aConfig => aConfig.hasPath("input") || aConfig.hasPath("output")).map(aConfig => {
@@ -79,7 +79,7 @@ object ProcessCacheService extends LazyLogging {
     if (purgeHttpConfig.uri == "{0}")
       runnablesGraphs
     else
-      CacheGraph.cacheRunnableGraph(CacheFlow(NoConfig(), NoConfig(), purgeHttpConfig)) :: runnablesGraphs
+      CacheGraph.cacheRunnableGraph(CacheFlow(NoConfig(), HttpConfig("https", HttpMethods.GET, "mogobiz.ebiznext.com", 443, "", Map(), 10), purgeHttpConfig)) :: runnablesGraphs
   }
 
   /**
@@ -98,78 +98,35 @@ object ProcessCacheService extends LazyLogging {
 
   /**
     *
-    * @param apiPrefix   prefix for the API
     * @param apiStore    name of the API store
-    * @param frontPrefix prefix for the frontend
-    * @param frontStore  name of the front store
-    * @return A config not resolved that contains all informations related with the parameters
-    */
-  private def buildStoreAndPrefixConfig(apiPrefix: String, apiStore: String, frontPrefix: String, frontStore: String) = {
-    val configAsString: String =
-      s"""
-         |mogobiz.cache.uri.generic{
-         | apiStore: "${apiStore}"
-         | frontStore: "${frontStore}"
-         | apiPrefix: "${apiPrefix}"
-         | frontPrefix: "${frontPrefix}"
-         |}
-    """.stripMargin
-    ConfigFactory.parseString(
-      configAsString)
-  }
-
-  /**
-    *
-    * @param staticUrls list of static urls which can benefit with substitutions from the whole config
-    * @return a config not resolved
-    */
-  private def buildStaticUrlsConfig(staticUrls: List[String]): Config = {
-    val sanitizedStaticUrls = staticUrls.filter(s => !s.isEmpty)
-    if(sanitizedStaticUrls.isEmpty) {
-      ConfigFactory.empty()
-    }
-    else {
-      sanitizedStaticUrls.map(l => {
-        s"""mogobiz.cache.uri.generic.process += {output: {
-        uri: ${l}
-        server: $${mogobiz.cache.server.api}
-      }}""".stripMargin
-      }).map(s => ConfigFactory.parseString(s))
-        .reduce((c1, c2) => c2.withFallback(c1))
-    }
-  }
-
-  /**
-    *
-    * @param apiPrefix   prefix for the API
-    * @param apiStore    name of the API store
-    * @param frontPrefix prefix for the frontend
-    * @param frontStore  name of the front store
-    * @param staticUrls list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
+    * @param staticUrls  list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
     * @return The whole config resolved
     */
-  private def buildWholeConfig(apiPrefix: String, apiStore: String, frontPrefix: String, frontStore: String, staticUrls: List[String]) = {
-    buildStoreAndPrefixConfig(apiPrefix, apiStore, frontPrefix, frontStore)
-      .withFallback(buildStaticUrlsConfig(staticUrls))
+  private def buildWholeConfig(apiStore: String, staticUrls: List[String]) = {
+    buildStaticUrlsConfig(apiStore, staticUrls)
       .withFallback(ConfigFactory.parseResources("application.conf"))
       .resolve()
   }
 
   /**
     *
-    * @param apiPrefix   prefix for the API
     * @param apiStore    name of the API store
-    * @param frontPrefix prefix for the frontend
-    * @param frontStore  name of the front store
     * @param staticUrls  list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
     */
-  def run(apiPrefix: String, apiStore: String, frontPrefix: String, frontStore: String, staticUrls: List[String]) {
+  def run(apiStore: String, staticUrls: List[String]) {
     logger.info("Starting to cache data")
+    val decider:Supervision.Decider = {
+      case e:IllegalUriException => {
+        logger.error(e.getMessage)
+        Supervision.resume
+      }
+      case _ => Supervision.stop
+    }
     implicit val system = ActorSystem()
-    implicit val _ = ActorMaterializer()
+    implicit val _ = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
     registerSprayHttpMethods()
     try {
-      val config = buildWholeConfig(apiPrefix, apiStore, frontPrefix, frontStore, staticUrls)
+      val config = buildWholeConfig(apiStore, staticUrls)
       run(buildRunnablesGraphs(config))
     } catch {
       case e: Throwable => {
