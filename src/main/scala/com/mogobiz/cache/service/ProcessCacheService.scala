@@ -81,7 +81,7 @@ object ProcessCacheService extends LazyLogging {
     }
     val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(config)
     logger.info(s"Built ${runnablesGraphs.length} runnables graphs")
-    if (purgeHttpConfig.uri == "{0}")
+    if (purgeHttpConfig.uri contains "${uri}")
       runnablesGraphs
     else
       CacheGraph.cacheRunnableGraph(CacheFlow(NoConfig(), HttpConfig("https", HttpMethods.GET, "mogobiz.ebiznext.com", 443, "", Map(), 10), purgeHttpConfig)) :: runnablesGraphs

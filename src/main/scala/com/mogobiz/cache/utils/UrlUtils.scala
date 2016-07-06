@@ -1,14 +1,14 @@
 package com.mogobiz.cache.utils
 
 import scala.util.matching.Regex
+import scala.util.matching.Regex.Match
 
 /**
   * Created by boun on 01/07/2016.
   */
 object UrlUtils {
 
-  val extractVariablesName = "\\Q${\\E(.*?)\\Q}\\E"
-  val extractVariablesNameRegex: Regex = extractVariablesName.r
+  val extractVariablesNameRegex: Regex = "\\Q${\\E(.*?)\\Q}\\E".r
   val extractVariablesRegex = "(\\Q${\\E.*?\\Q}\\E)".r
 
   /**
@@ -16,12 +16,20 @@ object UrlUtils {
     * @return StringContext of the URI.
     */
   def uriAsStringContext(uri:String): StringContext ={
-    val allStaticString: List[String] = uri.split(extractVariablesName).toList
-    val stringForStringContext = (extractVariablesName + "$").r.findFirstIn(uri) match {
-      case Some(_) => ("" :: allStaticString.reverse).reverse
-      case _ => allStaticString
+    def uriAsStringContext(regexMatches:List[Match], uriRest:String, stringPartAcc:List[String] = Nil): StringContext = {
+      regexMatches match {
+        case Nil => {
+          new StringContext((uriRest :: stringPartAcc): _*)
+        }
+        case aMatch :: restRegexMatches => {
+          val (uriRestWithVariable, stringPart) = uri.splitAt(aMatch.end)
+          val (newUriRest, variable) = uriRestWithVariable.splitAt(aMatch.start)
+          uriAsStringContext(restRegexMatches,newUriRest, stringPart :: stringPartAcc)
+        }
+      }
     }
-    new StringContext(stringForStringContext:_*)
+    val regexMatches: List[Match] = extractVariablesNameRegex.findAllMatchIn(uri).toList.reverse
+    uriAsStringContext(regexMatches, uri)
   }
 
   /**
