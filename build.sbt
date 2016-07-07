@@ -2,7 +2,7 @@ name := "mogobiz-cache"
 
 organization in ThisBuild := "com.mogobiz"
 
-version in ThisBuild := "0.1-SNAPSHOT"
+//version in ThisBuild := "0.1-SNAPSHOT"
 
 logLevel in Global := Level.Info
 
@@ -17,6 +17,10 @@ resolvers in ThisBuild ++= Seq(
 "ebiz repo" at "http://art.ebiznext.com/artifactory/libs-release-local",
 "Typesafe Releases" at "http://repo.typesafe.com/typesafe/releases/"
 )
+
+git.useGitDescribe := true
+
+git.gitUncommittedChanges := false
 
 val akkaStreamV = "1.0"
 
@@ -36,6 +40,8 @@ libraryDependencies in ThisBuild ++= Seq(
   "org.slf4j" % "slf4j-log4j12" % slf4jLog4jV,
   "org.scalatest" % "scalatest_2.11" % scalaTestV
 )
+
+enablePlugins(GitVersioning, GitBranchPrompt)
 
 mainClass in assembly := Some("com.mogobiz.cache.bin.ProcessCache")
 
