@@ -18,7 +18,7 @@ import scala.concurrent.Future
 
 case class CacheFlow(sourceConfig: CacheConfig, outputConfig: CacheConfig, purgeConfig: CacheConfig)
 
-case class FlowItem(fullUri: String, httpResponse: Option[HttpResponse])
+case class FlowItem(protocolHostPort: String, relativeUrl: String, httpResponse: Option[HttpResponse])
 
 object CacheGraph extends LazyLogging with RequestBuilding {
 
@@ -78,9 +78,10 @@ object CacheGraph extends LazyLogging with RequestBuilding {
   def buildRequestInfoFlow(cacheConfig: CacheConfig)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) = {
     cacheConfig match {
       case c: HttpConfig => Flow[Map[String, String]].map { (fields: Map[String, String]) => {
-        val fullUri: String = c.getFullUri(fields)
-        logger.info(s"Building uri ${fullUri}")
-        FlowItem(fullUri, None)
+        val relativeUri: String = c.getRelativeUri(fields)
+        val protocolHostPort: String = c.getProtocolHostPort
+        logger.info(s"Building uri ${protocolHostPort}${relativeUri}")
+        FlowItem(protocolHostPort, relativeUri, None)
       }
       }
     }
@@ -98,15 +99,38 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     import actorSystem.dispatcher
     cacheConfig match {
       case c: HttpConfig => Flow[FlowItem].mapAsyncUnordered(c.maxClient) { (flowItem: FlowItem) => {
-        val targetUri = transformUri(flowItem.fullUri)
-        logger.info(s"Requesting ${c.method} ${targetUri}")
-        val request: HttpRequest = HttpRequest(c.method, targetUri, buildHeaders(c))
+        val targetUrl = s"${flowItem.protocolHostPort}${transformUri(flowItem.relativeUrl)}"
+        logger.info(s"Requesting ${c.method} ${targetUrl}")
+        val request: HttpRequest = HttpRequest(c.method, targetUrl, buildHeaders(c))
         pipeline.flatMap(p => p(request)).map(httpResponse => flowItem.copy(httpResponse = Some(httpResponse)))
       }
       }
       case _: NoConfig => Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
     }
   }
+
+    /**
+      *
+      * @param cacheFlow
+      * @param actorSystem
+      * @param actorMaterializer
+      * @return return a runnable graph base on the flow described.
+      */
+    def globalPurgeCacheGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
+    RunnableGraph[Future[Unit]] = {
+      import actorSystem.dispatcher
+      cacheFlow match {
+        case CacheFlow(s: NoConfig, h: HttpConfig, p: PurgeConfig) => {
+          val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
+          val source: Source[Map[String, String], Unit] = buildSource(s)
+          val requestFlow = buildRequestInfoFlow(h.copy(uri = p.uri))
+          val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
+          val purgeHttpCallFlow = buildHttpCallFlow(purgeHttpConfig, pipeline)
+          source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method)).toMat(Sink.ignore)(Keep.right)
+        }
+        case CacheFlow(source, sink, purge) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
+      }
+    }
 
   /**
     *
@@ -126,12 +150,15 @@ object CacheGraph extends LazyLogging with RequestBuilding {
         val transformPurgeUri = (uri: String) => {
           UrlUtils.uriAsStringContext(p.uri).s(uri)
         }
-        val purgeHttpCallFlow = if (p.uri contains "${uri}") {
+        val purgeHttpCallFlow = if (p.isByUri) {
           val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
           buildHttpCallFlow(purgeHttpConfig, pipeline, transformPurgeUri)
-        } else Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
+        } else {
+          // ignore global purge config in cache graph
+          Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
+        }
         val cacheHttpCallFlow = buildHttpCallFlow(h, pipeline)
-        source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(transformPurgeUri)).via(cacheHttpCallFlow).via(logHttpResponseFailure()).toMat(Sink.ignore)(Keep.right)
+        source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method, transformPurgeUri)).via(cacheHttpCallFlow).via(logHttpResponseFailure(h.method)).toMat(Sink.ignore)(Keep.right)
       }
       case CacheFlow(source, sink, purge) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
     }
@@ -147,10 +174,11 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     *
     * @return the current HttpResponse.
     */
-  def logHttpResponseFailure(transformUri: (String) => String = (uri) => uri) = Flow[FlowItem].map { flowItem =>
-    flowItem.httpResponse.filter(_.status.isFailure).foreach(h =>
-      logger.warn(s"Request ${transformUri(flowItem.fullUri)} failed with status ${h.status}")
-    )
-    flowItem
+  def logHttpResponseFailure(method:HttpMethod, transformUri: (String) => String = (uri) => uri) = Flow[FlowItem].map {
+    flowItem =>
+      flowItem.httpResponse.filter(_.status.isFailure).foreach(h =>
+        logger.warn(s"Request ${method} ${flowItem.protocolHostPort}${transformUri(flowItem.relativeUrl)} failed with status ${h.status}")
+      )
+      flowItem
   }
 }

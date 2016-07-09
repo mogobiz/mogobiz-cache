@@ -174,7 +174,11 @@ object ConfigHelpers extends LazyLogging {
       validUrl.getHost + ":" + validUrl.getPort
     else
       validUrl.getHost
-    validUrl.toExternalForm.split(Regex.quote(hostAndPort))(1)
+    val split: Array[String] = validUrl.toExternalForm.split(Regex.quote(hostAndPort))
+    if(split.length > 1)
+      split(1)
+    else
+      ""
   }
 
   /**

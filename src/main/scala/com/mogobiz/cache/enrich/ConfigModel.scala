@@ -32,7 +32,9 @@ case class NoConfig() extends CacheConfig
   *
   * @param uri       uri to call, starting with /
   */
-case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[String, String]) extends CacheConfig
+case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[String, String]) extends CacheConfig {
+  def isByUri = uri contains "${uri}"
+}
 /**
   *
   * @param protocol  http or https
@@ -59,10 +61,20 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
     * @return the full uri with the uri interpolated.
     */
   def getFullUri(params: Map[String,String]): String = {
-    //val uriWithParams: String = MessageFormat.format(uri, params: _*)
+    s"${getProtocolHostPort}${getRelativeUri(params)}"
+  }
+
+  def getProtocolHostPort = {
+    s"${protocol}://${host}:${port}"
+  }
+
+  /**
+    * @param params
+    * @return the full uri with the uri interpolated.
+    */
+  def getRelativeUri(params: Map[String,String]): String = {
     val values: List[String] = uriVariables.map(v => params.getOrElse(v,""))
-    val uriWithParams: String = uriStringContext.s(values:_*)
-    s"${protocol}://${host}:${port}${uriWithParams}"
+    uriStringContext.s(values:_*)
   }
 }
 

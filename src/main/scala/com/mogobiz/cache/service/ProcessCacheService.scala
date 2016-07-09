@@ -1,12 +1,12 @@
 package com.mogobiz.cache.service
 
 import akka.actor.ActorSystem
-import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import akka.stream.scaladsl.RunnableGraph
+import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import com.mogobiz.cache.enrich.ConfigHelpers._
 import com.mogobiz.cache.enrich.{HttpConfig, NoConfig, PurgeConfig}
 import com.mogobiz.cache.graph.{CacheFlow, CacheGraph}
-import com.typesafe.config.{Config, ConfigFactory}
+import com.typesafe.config.{Config, ConfigFactory, ConfigObject}
 import com.typesafe.scalalogging.LazyLogging
 import spray.http.{HttpMethod, HttpMethods, IllegalUriException}
 
@@ -23,7 +23,7 @@ object ProcessCacheService extends LazyLogging {
   var errorEncountered = false
 
   val genericProcessCache = "mogobiz.cache.uri.generic.process"
-  val genericPurge = "mogobiz.cache.uri.generic.purge"
+  val genericPurge = "mogobiz.cache.purges"
 
   /**
     * Run each runnable graph sequentially. Stop at the first failure.
@@ -70,21 +70,32 @@ object ProcessCacheService extends LazyLogging {
     *         An output is of type HttpConfig
     */
   private def buildRunnablesGraphs(config: Config)(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
-    val purgeHttpConfig: PurgeConfig = config.getConfig(genericPurge).toPurgeConfig()
-    def buildRunnableGraphs(config: Config) = {
+    val purgeHttpConfig: Map[String, PurgeConfig] = config.getObject(genericPurge).entrySet().map(entry => {
+      val purgeConfig: Config = entry.getValue.asInstanceOf[ConfigObject].toConfig
+      entry.getKey -> purgeConfig.toPurgeConfig()
+    }).toMap
+    def buildCacheFlows(config: Config) = {
       implicit val configImpl = config
       config.getConfigList(genericProcessCache).filter(aConfig => aConfig.hasPath("input") || aConfig.hasPath("output")).map(aConfig => {
         val source = if (aConfig.hasPath("input")) aConfig.getConfig("input").toEsConfig else NoConfig()
         val sink = aConfig.getConfig("output").toHttpConfig()
-        CacheFlow(source, sink, purgeHttpConfig)
-      }).map(CacheGraph.cacheRunnableGraph).toList
+        CacheFlow(source, sink, purgeHttpConfig.getOrElse(sink.host, purgeHttpConfig.get("generic").get))
+      }).toList
     }
-    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(config)
+    def buildRunnableGraphs(cacheFlows: List[CacheFlow]) = {
+      cacheFlows.map(CacheGraph.cacheRunnableGraph)
+    }
+
+    val cacheFlows: List[CacheFlow] = buildCacheFlows(config)
+    val globalPurge = cacheFlows.filterNot{
+      case CacheFlow(_, _, purgeConfig:PurgeConfig) => purgeConfig.isByUri
+    }
+    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(cacheFlows)
     logger.info(s"Built ${runnablesGraphs.length} runnables graphs")
-    if (purgeHttpConfig.uri contains "${uri}")
-      runnablesGraphs
-    else
-      CacheGraph.cacheRunnableGraph(CacheFlow(NoConfig(), HttpConfig("https", HttpMethods.GET, "mogobiz.ebiznext.com", 443, "", Map(), 10), purgeHttpConfig)) :: runnablesGraphs
+    val globalPurgeGraphs: List[RunnableGraph[Future[Unit]]] = globalPurge.map{
+      case CacheFlow(_, httpConfig:HttpConfig, purgeConfig:PurgeConfig) => CacheGraph.globalPurgeCacheGraph(CacheFlow(NoConfig(), httpConfig, purgeConfig))
+    }
+    globalPurgeGraphs ::: runnablesGraphs
   }
 
   /**
