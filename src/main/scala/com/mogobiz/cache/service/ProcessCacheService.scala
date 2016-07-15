@@ -4,7 +4,7 @@ import akka.actor.ActorSystem
 import akka.stream.scaladsl.RunnableGraph
 import akka.stream.{ActorMaterializer, ActorMaterializerSettings, Supervision}
 import com.mogobiz.cache.enrich.ConfigHelpers._
-import com.mogobiz.cache.enrich.{HttpConfig, NoConfig, PurgeConfig}
+import com.mogobiz.cache.enrich.{ConfigHelpers, HttpConfig, PurgeConfig}
 import com.mogobiz.cache.graph.{CacheFlow, CacheGraph}
 import com.typesafe.config.{Config, ConfigFactory, ConfigObject}
 import com.typesafe.scalalogging.LazyLogging
@@ -35,23 +35,24 @@ object ProcessCacheService extends LazyLogging {
   private def run(runnableGraphs: List[RunnableGraph[Future[Unit]]])(implicit system: ActorSystem, actorMaterializer: ActorMaterializer) {
     import system.dispatcher
     def run(result: Future[Unit], remainingRunnableGraphs: List[RunnableGraph[Future[Unit]]]): Unit = {
-      result.onComplete {
-        case Success(_) => {
-          remainingRunnableGraphs match {
-            case first :: rest => run(first.run(), rest)
-            case _ => {
-              system.shutdown()
-              logger.info(s"Successfully run ${runnableGraphs.length} jobs")
-              if(errorEncountered){
-                logger.info("Still, some errors have been encountered. Please check logs to have more details.")
-              }
-            }
+      def runNextJob = remainingRunnableGraphs match {
+        case first :: rest => run(first.run(), rest)
+        case _ => {
+          system.shutdown()
+          logger.info(s"Successfully run ${runnableGraphs.length} jobs")
+          if(errorEncountered){
+            logger.info("Still, some errors have been encountered. Please check logs to have more details.")
           }
         }
+      }
+      result.onComplete {
+        case Success(_) => {
+          runNextJob
+        }
         case Failure(e) => {
-          system.shutdown()
           logger.error(s"Failed at job ${runnableGraphs.length - remainingRunnableGraphs.length} of ${runnableGraphs.length}")
           logger.error(e.getMessage, e)
+          runNextJob
         }
       }
     }
@@ -60,7 +61,7 @@ object ProcessCacheService extends LazyLogging {
 
   /**
     *
-    * @param config
+    * @param cacheFlows
     * @param system
     * @param actorMaterializer
     * @return runnables graphs built from the configuration file.
@@ -69,31 +70,26 @@ object ProcessCacheService extends LazyLogging {
     *         If no input is found, a NoConfig is created else an EsConfig.
     *         An output is of type HttpConfig
     */
-  private def buildRunnablesGraphs(config: Config)(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
+  private def buildRunnablesGraphs(cacheFlows: List[CacheFlow])(implicit system: ActorSystem, actorMaterializer: ActorMaterializer): List[RunnableGraph[Future[Unit]]] = {
+    val config: Config = ConfigFactory.load()
     val purgeHttpConfig: Map[String, PurgeConfig] = config.getObject(genericPurge).entrySet().map(entry => {
       val purgeConfig: Config = entry.getValue.asInstanceOf[ConfigObject].toConfig
       entry.getKey -> purgeConfig.toPurgeConfig()
     }).toMap
-    def buildCacheFlows(config: Config) = {
-      implicit val configImpl = config
-      config.getConfigList(genericProcessCache).filter(aConfig => aConfig.hasPath("input") || aConfig.hasPath("output")).map(aConfig => {
-        val source = if (aConfig.hasPath("input")) aConfig.getConfig("input").toEsConfig else NoConfig()
-        val sink = aConfig.getConfig("output").toHttpConfig()
-        CacheFlow(source, sink, purgeHttpConfig.getOrElse(sink.host, purgeHttpConfig.get("generic").get))
-      }).toList
-    }
     def buildRunnableGraphs(cacheFlows: List[CacheFlow]) = {
       cacheFlows.map(CacheGraph.cacheRunnableGraph)
     }
 
-    val cacheFlows: List[CacheFlow] = buildCacheFlows(config)
-    val globalPurge = cacheFlows.filterNot{
+    val cacheFlowsWithPurge: List[CacheFlow] = cacheFlows.map(cacheFlow => {
+      cacheFlow.copy(purgeConfig = purgeHttpConfig.getOrElse(cacheFlow.outputConfig.host, purgeHttpConfig.get("generic").get))
+    })
+    val globalPurge = cacheFlowsWithPurge.filterNot{
       case CacheFlow(_, _, purgeConfig:PurgeConfig) => purgeConfig.isByUri
     }
-    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(cacheFlows)
+    val runnablesGraphs: List[RunnableGraph[Future[Unit]]] = buildRunnableGraphs(cacheFlowsWithPurge)
     logger.info(s"Built ${runnablesGraphs.length} runnables graphs")
     val globalPurgeGraphs: List[RunnableGraph[Future[Unit]]] = globalPurge.map{
-      case CacheFlow(_, httpConfig:HttpConfig, purgeConfig:PurgeConfig) => CacheGraph.globalPurgeCacheGraph(CacheFlow(NoConfig(), httpConfig, purgeConfig))
+      case CacheFlow(_, httpConfig:HttpConfig, purgeConfig:PurgeConfig) => CacheGraph.globalPurgeCacheGraph(CacheFlow(None, httpConfig, purgeConfig))
     }
     globalPurgeGraphs ::: runnablesGraphs
   }
@@ -116,18 +112,6 @@ object ProcessCacheService extends LazyLogging {
     *
     * @param apiStore    name of the API store
     * @param staticUrls  list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
-    * @return The whole config resolved
-    */
-  private def buildWholeConfig(apiStore: String, staticUrls: List[String]) = {
-    buildStaticUrlsConfig(apiStore, staticUrls)
-      .withFallback(ConfigFactory.parseResources("application.conf"))
-      .resolve()
-  }
-
-  /**
-    *
-    * @param apiStore    name of the API store
-    * @param staticUrls  list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
     */
   def run(apiStore: String, staticUrls: List[String]) {
     logger.info("Starting to cache data")
@@ -143,7 +127,7 @@ object ProcessCacheService extends LazyLogging {
     implicit val _ = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
     registerSprayHttpMethods()
     try {
-      val config = buildWholeConfig(apiStore, staticUrls)
+      val config: List[CacheFlow] = ConfigHelpers.buildStaticUrlsConfig(apiStore, staticUrls)
       run(buildRunnablesGraphs(config))
     } catch {
       case e: Throwable => {

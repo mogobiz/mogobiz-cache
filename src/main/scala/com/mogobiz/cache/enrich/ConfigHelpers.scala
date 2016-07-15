@@ -3,6 +3,7 @@ package com.mogobiz.cache.enrich
 import java.net.URL
 
 import com.mogobiz.cache.exception.UnsupportedConfigException
+import com.mogobiz.cache.graph.CacheFlow
 import com.mogobiz.cache.utils.UrlUtils
 import com.typesafe.config.{Config, ConfigFactory, ConfigValueType}
 import com.typesafe.scalalogging.LazyLogging
@@ -34,39 +35,6 @@ object ConfigHelpers extends LazyLogging {
       val username: String = config.getString("username")
       val password: String = config.getString("password")
       SearchGuardConfig(active, username, password)
-    }
-
-    /**
-      *
-      * @param rootConfig needed for the default value of the store.
-      * @return build an EsConfig instance from a config file.
-      */
-    def toEsConfig()(implicit rootConfig: Config): EsConfig = {
-      val esConfig: Config = config.getConfig("server")
-      val protocol = esConfig.getString("protocol")
-      val host = esConfig.getString("host")
-      val port: Integer = esConfig.getInt("port")
-      val searchguardConfig = if (esConfig.hasPath("searchguard")) {
-        esConfig.getConfig("searchguard").toSearchGuardConfig()
-      } else {
-        SearchGuardConfig()
-      }
-      val index: String = config.getOrElse("index", rootConfig.getString("mogobiz.cache.store"))
-      val tpe = config.getString("type")
-      val fields: List[String] = config.getAsList("fields")
-      val scrollTime = config.getOrElse("scroll", "1m")
-      val encodeFields: List[Boolean] = if (config.hasPath("encodeFields")) {
-        val booleans: List[Boolean] = config.getAsList[Boolean]("encodeFields")
-        //feel the list to match at least fields size.
-        if (booleans.length < fields.length) {
-          (booleans.length until fields.length).foldLeft(booleans.reverse)((list, i) => true :: list).reverse
-        } else {
-          booleans
-        }
-      } else {
-        fields.map(f => true)
-      }
-      EsConfig(protocol, host, port, index, tpe, scrollTime, fields, encodeFields, searchguardConfig, esConfig.getOrElse("maxClient", 10))
     }
 
     /**
@@ -105,25 +73,6 @@ object ConfigHelpers extends LazyLogging {
     /**
       * @return a HttpConfig
       */
-    def toHttpConfig(): HttpConfig = {
-      val httpServer: Config = config.getConfig("server")
-      val method: HttpMethod = HttpMethods.getForKey(config.getOrElse("method", "GET").toUpperCase) match {
-        case Some(httpMethod) => httpMethod
-        case _ => throw UnsupportedConfigException(config.getString("method").toUpperCase + " HTTP method is unknown")
-      }
-      val additionnalHeaders = if (config.hasPath("headers")) {
-        config.getConfig("headers").entrySet().map(entry => {
-          entry.getKey -> entry.getValue.unwrapped().toString
-        }).toMap
-      } else {
-        Map.empty[String, String]
-      }
-      HttpConfig(httpServer.getString("protocol"), method, httpServer.getString("host"), httpServer.getInt("port"), config.getString("uri"), additionnalHeaders, httpServer.getOrElse("maxClient", 10))
-    }
-
-    /**
-      * @return a HttpConfig
-      */
     def toPurgeConfig(): PurgeConfig = {
       val method: HttpMethod = HttpMethods.getForKey(config.getOrElse("method", "GET").toUpperCase) match {
         case Some(httpMethod) => httpMethod
@@ -154,12 +103,7 @@ object ConfigHelpers extends LazyLogging {
     }
     getEsTypesFieldsAndFiltersFromUrl() match {
       case Success(esIndicesFromUrl) => {
-        if (esIndicesFromUrl.size > 1) {
-          logger.error(s"${url} use more than one ES type")
-          None
-        } else {
-          Some((url, esIndicesFromUrl))
-        }
+        Some((url, esIndicesFromUrl))
       }
       case Failure(e) => {
         logger.error(e.getMessage)
@@ -175,10 +119,53 @@ object ConfigHelpers extends LazyLogging {
     else
       validUrl.getHost
     val split: Array[String] = validUrl.toExternalForm.split(Regex.quote(hostAndPort))
-    if(split.length > 1)
+    if (split.length > 1)
       split(1)
     else
       ""
+  }
+
+  private def getHttpConfig(url: URL, maxClient: Integer): HttpConfig = {
+    HttpConfig(
+      url.getProtocol,
+      HttpMethods.GET,
+      url.getHost,
+      if (url.getPort == -1) url.getDefaultPort else url.getPort,
+      getUri(url),
+      Map(),
+      maxClient
+    )
+  }
+
+  private def getEsConfig(esTypesFieldsAndFilters: Map[String, List[(String, String)]], esIndex: String): List[EsConfig] = {
+    esTypesFieldsAndFilters.toList.map {
+      case (index, fieldsAndFilters) => {
+        val esFields: List[(String, Boolean)] = fieldsAndFilters.map { case (field, filter) => {
+          val encodeField = if (filter == "encode")
+            true
+          else
+            false
+          (field, encodeField)
+        }
+        }
+        val esConfig: Config = ConfigFactory.load().getConfig("mogobiz.cache.server.es")
+        val searchguardConfig = if (esConfig.hasPath("searchguard")) {
+          esConfig.getConfig("searchguard").toSearchGuardConfig()
+        } else {
+          SearchGuardConfig()
+        }
+        EsConfig(
+          esConfig.getString("protocol"),
+          esConfig.getString("host"),
+          esConfig.getInt("port"),
+          esIndex,
+          index,
+          "1m",
+          esFields,
+          searchguardConfig
+        )
+      }
+    }
   }
 
   /**
@@ -186,81 +173,41 @@ object ConfigHelpers extends LazyLogging {
     * @param staticUrls list of static urls which can benefit with substitutions from the whole config
     * @return a config not resolved
     */
-  def buildStaticUrlsConfig(esIndex: String, staticUrls: List[String]): Config = {
+  def buildStaticUrlsConfig(esIndex: String, staticUrls: List[String]): List[CacheFlow] = {
     val sanitizedStaticUrls = staticUrls.filter(s => !s.isEmpty)
     if (sanitizedStaticUrls.isEmpty) {
-      ConfigFactory.empty()
+      List[CacheFlow]()
     }
     else {
-      val configList: List[Config] = sanitizedStaticUrls
+      sanitizedStaticUrls
+        .flatMap(getEsTypesFieldsAndFiltersFromUrl)
         .flatMap {
-          getEsTypesFieldsAndFiltersFromUrl
-        }
-        .flatMap { case (url, esTypesFieldsAndFilters) => {
-          Try {
-            new URL(UrlUtils.stripSpaceAndFiltersInVariable(url))
-          } match {
-            case Success(validUrl) => {
-              // We handle only one indice at the moment
-              esTypesFieldsAndFilters.toList.headOption match {
-                case Some((index, fieldsAndFilters)) => {
-                  val esFields: String = fieldsAndFilters.map { case (field, filter) => "\"" + field + "\"" }.toSet.mkString("[", ",", "]")
-                  val encodeFields: String = fieldsAndFilters.map { case (field, filter) => {
-                    if (filter == "encode") {
-                      "true"
-                    } else {
-                      "false"
-                    }
+          case (url, esTypesFieldsAndFilters) => {
+            Try {
+              new URL(UrlUtils.stripSpaceAndFiltersInVariable(url))
+            } match {
+              case Success(validUrl) => {
+                val maxClient: Int = ConfigFactory.load().getInt("mogobiz.cache.server.httpServer.maxClient")
+                // We handle only one indice at the moment
+                esTypesFieldsAndFilters.isEmpty match {
+                  case true => {
+                    val httpConfig: HttpConfig = getHttpConfig(validUrl, maxClient)
+                    Some(CacheFlow(None, httpConfig, NoConfig()))
                   }
-                  }.toSet.mkString("[", ",", "]")
-                  Some(
-                    s"""mogobiz.cache.uri.generic.process += {
-                    input: {
-                      index: ${esIndex}
-                      type: "${index}"
-                      fields: ${esFields}
-                      encodeFields: ${encodeFields}
-                      scroll: "5m"
-                      size: 100
-                      server: $${mogobiz.cache.server.es}
-                    },
-                    output: {
-                      uri: "${getUri(validUrl)}"
-                      server: {
-                        protocol: "${validUrl.getProtocol}"
-                        host: "${validUrl.getHost}"
-                        port: "${if (validUrl.getPort == -1) validUrl.getDefaultPort else validUrl.getPort}"
-                        maxClient: $${mogobiz.cache.server.httpServer.maxClient}
-                      }
-                    }
-                  }""".stripMargin)
-                }
-                case _ => {
-                  Some(
-                    s"""mogobiz.cache.uri.generic.process += {output: {
-                        uri: "${getUri(validUrl)}"
-                        server: {
-                              protocol: "${validUrl.getProtocol}"
-                              host: "${validUrl.getHost}"
-                              port: ${if (validUrl.getPort == -1) validUrl.getDefaultPort else validUrl.getPort}
-                              maxClient: $${mogobiz.cache.server.httpServer.maxClient}
-                            }
-                      }}""".stripMargin)
+                  case false => {
+                    val esConfigList: List[EsConfig] = getEsConfig(esTypesFieldsAndFilters, esIndex)
+                    val httpConfig: HttpConfig = getHttpConfig(validUrl, maxClient)
+                    Some(CacheFlow(Some(esConfigList), httpConfig, NoConfig()))
+                  }
                 }
               }
-            }
-            case Failure(e) => {
-              logger.error(s"${url} is dropped", e)
-              None
+              case Failure(e) => {
+                logger.error(s"${url} is dropped", e)
+                None
+              }
             }
           }
         }
-        }.map(s => ConfigFactory.parseString(s))
-      configList.size match {
-        case 0 => ConfigFactory.empty()
-        case 1 => configList.head
-        case _ => configList.reduce((c1, c2) => c2.withFallback(c1))
-      }
     }
   }
 }

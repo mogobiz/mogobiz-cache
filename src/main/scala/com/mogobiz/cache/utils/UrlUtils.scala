@@ -22,7 +22,7 @@ object UrlUtils {
           new StringContext((uriRest :: stringPartAcc): _*)
         }
         case aMatch :: restRegexMatches => {
-          val (uriRestWithVariable, stringPart) = uri.splitAt(aMatch.end)
+          val (uriRestWithVariable, stringPart) = uriRest.splitAt(aMatch.end)
           val (newUriRest, variable) = uriRestWithVariable.splitAt(aMatch.start)
           uriAsStringContext(restRegexMatches,newUriRest, stringPart :: stringPartAcc)
         }

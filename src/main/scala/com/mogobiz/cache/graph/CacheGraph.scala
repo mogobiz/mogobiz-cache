@@ -8,6 +8,7 @@ import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Source, _}
 import com.mogobiz.cache.enrich._
 import com.mogobiz.cache.exception.UnsupportedConfigException
+import com.mogobiz.cache.stage.EsCombinator
 import com.mogobiz.cache.utils.{CustomSslConfiguration, HeadersUtils, UrlUtils}
 import com.typesafe.scalalogging.LazyLogging
 import spray.client.pipelining._
@@ -16,7 +17,7 @@ import spray.httpx.RequestBuilding
 
 import scala.concurrent.Future
 
-case class CacheFlow(sourceConfig: CacheConfig, outputConfig: CacheConfig, purgeConfig: CacheConfig)
+case class CacheFlow(sourceConfig: Option[List[EsConfig]], outputConfig: HttpConfig, purgeConfig: CacheConfig)
 
 case class FlowItem(protocolHostPort: String, relativeUrl: String, httpResponse: Option[HttpResponse])
 
@@ -29,42 +30,39 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     * @param actorMaterializer
     * @return an akka stream source
     */
-  def buildSource(cacheConfig: CacheConfig)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer): Source[Map[String, String], Unit] = {
-    cacheConfig match {
-      // Build a list of one element
-      case _: NoConfig => Source.single(Map())
-      // Build Es Source
-      case c: EsConfig => {
-        Source(c.getEsIterator().toStream)
-          .map(hit => {
-            c.fields.map(f => {
-              (s"${c.`type`}.${f}", hit.getOrElse(f, List()))
-            })
-          })
-          //remove all the hits that doesn't have all fields
-          .filter { fieldsPathsAndValues =>
-          val result: Boolean = fieldsPathsAndValues.count {
-            case (fieldPath, values) => !values.isEmpty
-          } == c.fields.length
-          if (!result) {
-            logger.warn("One hit doesn't have all required fields")
-          }
-          result
-        }
-          // currently keep the first value in case where a field has multiple value.
-          .map { fieldsPathsAndValues =>
-          fieldsPathsAndValues.map {
-            case (fieldPath, values) => (fieldPath, values(0))
-          }
-        }
-          // encode fields
-          .map { fieldsPathsAndValues =>
-          fieldsPathsAndValues.zip(c.encodeFields).map {
-            case ((fieldPath, value), true) => fieldPath -> URLEncoder.encode(value, StandardCharsets.UTF_8.name())
-            case ((fieldPath, value), _) => fieldPath -> value
-          }.toMap
-        }
+  def buildSource(cacheConfig: List[EsConfig])(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer) = {
+
+    val esCombinators: List[() => EsCombinator] = cacheConfig.tail.map(c => () => new EsCombinator(c))
+    val source: Source[Map[String, List[String]], Unit] = Source(cacheConfig.head.getEsIterator().toStream)
+    val sourceWithCombinators: Source[Map[String, List[String]], Unit] = esCombinators.foldLeft(source)((source, esCombinator) => source.transform(esCombinator))
+    val allFieldsPathAndEncode: List[(String, Boolean)] = cacheConfig.foldLeft(List[(String, Boolean)]())((fieldsPathAndEncode, c) => fieldsPathAndEncode ::: c.fieldsPathAndEncode)
+    sourceWithCombinators.map(hit => {
+      allFieldsPathAndEncode.map { case (fieldsPath, encode) => fieldsPath }.map(fieldsPath => {
+        (fieldsPath, hit.getOrElse(fieldsPath, List()))
+      })
+    })
+      //remove all the hits that doesn't have all fields
+      .filter { fieldsPathsAndValues =>
+      val result: Boolean = fieldsPathsAndValues.count {
+        case (fieldPath, values) => !values.isEmpty
+      } == allFieldsPathAndEncode.length
+      if (!result) {
+        logger.warn("One hit doesn't have all required fields")
       }
+      result
+    }
+      // currently keep the first value in case where a field has multiple value.
+      .map { fieldsPathsAndValues =>
+      fieldsPathsAndValues.map {
+        case (fieldPath, values) => (fieldPath, values(0))
+      }
+    }
+      // encode fields
+      .map { fieldsPathsAndValues =>
+      fieldsPathsAndValues.zip(allFieldsPathAndEncode.map { case (field, encode) => encode }).map {
+        case ((fieldPath, value), true) => fieldPath -> URLEncoder.encode(value, StandardCharsets.UTF_8.name())
+        case ((fieldPath, value), _) => fieldPath -> value
+      }.toMap
     }
   }
 
@@ -109,28 +107,28 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     }
   }
 
-    /**
-      *
-      * @param cacheFlow
-      * @param actorSystem
-      * @param actorMaterializer
-      * @return return a runnable graph base on the flow described.
-      */
-    def globalPurgeCacheGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
-    RunnableGraph[Future[Unit]] = {
-      import actorSystem.dispatcher
-      cacheFlow match {
-        case CacheFlow(s: NoConfig, h: HttpConfig, p: PurgeConfig) => {
-          val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
-          val source: Source[Map[String, String], Unit] = buildSource(s)
-          val requestFlow = buildRequestInfoFlow(h.copy(uri = p.uri))
-          val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
-          val purgeHttpCallFlow = buildHttpCallFlow(purgeHttpConfig, pipeline)
-          source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method)).toMat(Sink.ignore)(Keep.right)
-        }
-        case CacheFlow(source, sink, purge) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
+  /**
+    *
+    * @param cacheFlow
+    * @param actorSystem
+    * @param actorMaterializer
+    * @return return a runnable graph base on the flow described.
+    */
+  def globalPurgeCacheGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
+  RunnableGraph[Future[Unit]] = {
+    import actorSystem.dispatcher
+    cacheFlow match {
+      case CacheFlow(_, h: HttpConfig, p: PurgeConfig) => {
+        val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
+        val source: Source[Map[String, String], Unit] = Source.single(Map())
+        val requestFlow = buildRequestInfoFlow(h.copy(uri = p.uri))
+        val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
+        val purgeHttpCallFlow = buildHttpCallFlow(purgeHttpConfig, pipeline)
+        source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method)).toMat(Sink.ignore)(Keep.right)
       }
+      case CacheFlow(source, sink, purge) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
     }
+  }
 
   /**
     *
@@ -142,23 +140,32 @@ object CacheGraph extends LazyLogging with RequestBuilding {
   def cacheRunnableGraph(cacheFlow: CacheFlow)(implicit actorSystem: ActorSystem, actorMaterializer: ActorMaterializer):
   RunnableGraph[Future[Unit]] = {
     import actorSystem.dispatcher
+    def cacheRunnableGraph(source: Source[Map[String, String], Unit]) = {
+      cacheFlow match {
+        case CacheFlow(_, h: HttpConfig, p: PurgeConfig) => {
+          val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
+          val requestFlow = buildRequestInfoFlow(h)
+          val transformPurgeUri = (uri: String) => {
+            UrlUtils.uriAsStringContext(p.uri).s(uri)
+          }
+          val purgeHttpCallFlow = if (p.isByUri) {
+            val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
+            buildHttpCallFlow(purgeHttpConfig, pipeline, transformPurgeUri)
+          } else {
+            // ignore global purge config in cache graph
+            Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
+          }
+          val cacheHttpCallFlow = buildHttpCallFlow(h, pipeline)
+          source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method, transformPurgeUri)).via(cacheHttpCallFlow).via(logHttpResponseFailure(h.method)).toMat(Sink.ignore)(Keep.right)
+        }
+      }
+    }
     cacheFlow match {
-      case CacheFlow(s: CacheConfig, h: HttpConfig, p: PurgeConfig) => {
-        val pipeline = CustomSslConfiguration.getPipeline(h.host, h.port, h.protocol.toLowerCase == "https")
-        val source: Source[Map[String, String], Unit] = buildSource(s)
-        val requestFlow = buildRequestInfoFlow(h)
-        val transformPurgeUri = (uri: String) => {
-          UrlUtils.uriAsStringContext(p.uri).s(uri)
-        }
-        val purgeHttpCallFlow = if (p.isByUri) {
-          val purgeHttpConfig: HttpConfig = h.copy(method = p.method, uri = p.uri, additionalHeaders = p.additionalHeaders)
-          buildHttpCallFlow(purgeHttpConfig, pipeline, transformPurgeUri)
-        } else {
-          // ignore global purge config in cache graph
-          Flow[FlowItem].map(fi => fi.copy(httpResponse = None))
-        }
-        val cacheHttpCallFlow = buildHttpCallFlow(h, pipeline)
-        source.via(requestFlow).via(purgeHttpCallFlow).via(logHttpResponseFailure(p.method, transformPurgeUri)).via(cacheHttpCallFlow).via(logHttpResponseFailure(h.method)).toMat(Sink.ignore)(Keep.right)
+      case CacheFlow(Some(s), h: HttpConfig, p: PurgeConfig) => {
+        cacheRunnableGraph(buildSource(s))
+      }
+      case CacheFlow(None, h: HttpConfig, p: PurgeConfig) => {
+        cacheRunnableGraph(Source.single(Map()))
       }
       case CacheFlow(source, sink, purge) => throw UnsupportedConfigException(s"Input[${source.getClass.getName}] to Sink[${sink.getClass.getName}] not supported")
     }
@@ -174,7 +181,7 @@ object CacheGraph extends LazyLogging with RequestBuilding {
     *
     * @return the current HttpResponse.
     */
-  def logHttpResponseFailure(method:HttpMethod, transformUri: (String) => String = (uri) => uri) = Flow[FlowItem].map {
+  def logHttpResponseFailure(method: HttpMethod, transformUri: (String) => String = (uri) => uri) = Flow[FlowItem].map {
     flowItem =>
       flowItem.httpResponse.filter(_.status.isFailure).foreach(h =>
         logger.warn(s"Request ${method} ${flowItem.protocolHostPort}${transformUri(flowItem.relativeUrl)} failed with status ${h.status}")

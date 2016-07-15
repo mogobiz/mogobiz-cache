@@ -88,10 +88,13 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
   * @param index      elastic search's index
   * @param `type`     elastic search's type
   * @param scrollTime search context opened period
-  * @param fields     fields to select for each hits
+  * @param fieldsAndEncode     fields to select for each hits and boolean to check if it needs encoding
   * @param batchSize  number of elements to retrieve after each call.
   */
-case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fields: List[String], encodeFields: List[Boolean], searchGuardConfig: SearchGuardConfig, batchSize: Integer = 100) extends CacheConfig with LazyLogging {
+case class EsConfig(protocol: String, host: String, port: Integer, index: String, `type`: String, scrollTime: String, fieldsAndEncode: List[(String, Boolean)], searchGuardConfig: SearchGuardConfig, batchSize: Integer = 100) extends CacheConfig with LazyLogging {
+
+  val distinctFields = fieldsAndEncode.map{case(field, encode) => field}.toSet
+  val fieldsPathAndEncode = fieldsAndEncode.map{case(field, encode) => (`type` + '.' + field, encode)}
 
   /**
     * @param actorSystem
@@ -110,7 +113,7 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         * Initial scrollId by asking elastic search to scan and scroll. No hits are returned by this request.
         */
       private[this] var scrollId = {
-        val fieldsRequested: String = fields.mkString(",")
+        val fieldsRequested: String = distinctFields.mkString(",")
         val urlScanScroll: String = s"${protocol}://${host}:${port}/${index}/${`type`}/_search?scroll=${scrollTime}&search_type=scan&fields=${fieldsRequested}&size=${batchSize}"
         val scanScrollHttpRequest = if (searchGuardConfig.active) {
           Get(urlScanScroll) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password))
@@ -159,14 +162,14 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
           import ConfigHelpers._
           if (c.hasPath("fields")) {
             val fieldsConfig: Config = c.getConfig("fields")
-            fields.flatMap(f => {
+            distinctFields.flatMap{f => {
               val quotedField = "\"" + f + "\""
               if (fieldsConfig.hasPath(quotedField)) {
-                Some(f -> fieldsConfig.getAsList[AnyRef](quotedField).map(_.toString))
+                Some(`type` + '.' + f -> fieldsConfig.getAsList[AnyRef](quotedField).map(_.toString))
               } else {
                 None
               }
-            }).toMap
+            }}.toMap
           } else {
             Map.empty[String, List[String]]
           }
