@@ -32,6 +32,9 @@
     <!--<logger name="com.mogobiz.cache.enrich.ConfigModel">-->
     <!--<level value = "INFO"/>-->
     <!--</logger>-->
+    <logger name="com.mogobiz.cache.enrich">
+        <level value = "INFO"/>
+    </logger>
     <logger name="com.mogobiz.cache">
         <level value="INFO"/>
     </logger>

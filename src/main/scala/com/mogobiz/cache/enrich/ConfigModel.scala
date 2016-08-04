@@ -1,6 +1,7 @@
 package com.mogobiz.cache.enrich
 
 import java.util.concurrent.TimeUnit
+import javax.xml.ws.http.HTTPException
 
 import akka.actor.ActorSystem
 import com.mogobiz.cache.utils.{CustomSslConfiguration, UrlUtils}
@@ -122,10 +123,15 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         }
         val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
         val response: HttpResponse = getFuture(httpResponseF)
+        val responseStr: String = response.entity.asString
         if (response.status.isFailure) {
-          logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index}")
+          logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index} and type ${`type`}")
+          logger.error(responseStr)
+          throw new HTTPException(response.status.intValue);
+        } else {
+          logger.debug(s"ES Response :\n${responseStr}")
         }
-        ConfigFactory.parseString(response.entity.asString).getString("_scroll_id")
+        ConfigFactory.parseString(responseStr).getString("_scroll_id")
       }
 
       /**
