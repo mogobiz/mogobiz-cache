@@ -2,17 +2,15 @@ package com.mogobiz.cache.enrich
 
 import java.net.URL
 
-import com.mogobiz.cache.exception.UnsupportedConfigException
 import com.mogobiz.cache.graph.CacheFlow
 import com.mogobiz.cache.utils.UrlUtils
 import com.typesafe.config.{Config, ConfigFactory, ConfigValueType}
 import com.typesafe.scalalogging.LazyLogging
-import spray.http.{HttpMethod, HttpMethods}
 
 import scala.collection.JavaConversions._
 import scala.reflect.runtime.universe._
-import scala.util.{Failure, Success, Try}
 import scala.util.matching.Regex
+import scala.util.{Failure, Success, Try}
 
 /**
   * Define helpers to typesafe's config
@@ -74,10 +72,6 @@ object ConfigHelpers extends LazyLogging {
       * @return a HttpConfig
       */
     def toPurgeConfig(): PurgeConfig = {
-      val method: HttpMethod = HttpMethods.getForKey(config.getOrElse("method", "GET").toUpperCase) match {
-        case Some(httpMethod) => httpMethod
-        case _ => throw UnsupportedConfigException(config.getString("method").toUpperCase + " HTTP method is unknown")
-      }
       val additionnalHeaders = if (config.hasPath("headers")) {
         config.getConfig("headers").entrySet().map(entry => {
           entry.getKey -> entry.getValue.unwrapped().toString
@@ -85,7 +79,7 @@ object ConfigHelpers extends LazyLogging {
       } else {
         Map.empty[String, String]
       }
-      PurgeConfig(method, config.getString("uri"), additionnalHeaders)
+      PurgeConfig(config.getOrElse("method", "GET").toUpperCase, config.getString("uri"), additionnalHeaders)
     }
   }
 
@@ -128,7 +122,7 @@ object ConfigHelpers extends LazyLogging {
   private def getHttpConfig(url: URL, maxClient: Integer): HttpConfig = {
     HttpConfig(
       url.getProtocol,
-      HttpMethods.GET,
+      "GET",
       url.getHost,
       if (url.getPort == -1) url.getDefaultPort else url.getPort,
       getUri(url),

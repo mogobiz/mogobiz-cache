@@ -8,7 +8,6 @@ import com.mogobiz.cache.enrich.{ConfigHelpers, HttpConfig, PurgeConfig}
 import com.mogobiz.cache.graph.{CacheFlow, CacheGraph}
 import com.typesafe.config.{Config, ConfigFactory, ConfigObject}
 import com.typesafe.scalalogging.LazyLogging
-import spray.http.{HttpMethod, HttpMethods, IllegalUriException}
 
 import scala.collection.JavaConversions._
 import scala.concurrent.Future
@@ -35,6 +34,7 @@ object ProcessCacheService extends LazyLogging {
   private def run(runnableGraphs: List[RunnableGraph[Future[Unit]]])(implicit system: ActorSystem, actorMaterializer: ActorMaterializer) {
     import system.dispatcher
     def run(result: Future[Unit], remainingRunnableGraphs: List[RunnableGraph[Future[Unit]]]): Unit = {
+      logger.info(s"Starting job ${runnableGraphs.length - remainingRunnableGraphs.length} out of ${runnableGraphs.length}")
       def runNextJob = remainingRunnableGraphs match {
         case first :: rest => run(first.run(), rest)
         case _ => {
@@ -47,10 +47,11 @@ object ProcessCacheService extends LazyLogging {
       }
       result.onComplete {
         case Success(_) => {
+          logger.info(s"Successfully ran job ${runnableGraphs.length - remainingRunnableGraphs.length} out of ${runnableGraphs.length}")
           runNextJob
         }
         case Failure(e) => {
-          logger.error(s"Failed at job ${runnableGraphs.length - remainingRunnableGraphs.length} of ${runnableGraphs.length}")
+          logger.error(s"Failed at job ${runnableGraphs.length - remainingRunnableGraphs.length} out of ${runnableGraphs.length}")
           logger.error(e.getMessage, e)
           runNextJob
         }
@@ -95,20 +96,6 @@ object ProcessCacheService extends LazyLogging {
   }
 
   /**
-    * Register additionnal spray Http methods
-    */
-  private def registerSprayHttpMethods(): Unit = {
-    HttpMethods.getForKey("PURGE") match {
-      case None => HttpMethods.register(HttpMethod.custom("PURGE", true, true, false))
-      case _ =>
-    }
-    HttpMethods.getForKey("BAN") match {
-      case None => HttpMethods.register(HttpMethod.custom("BAN", true, true, false))
-      case _ =>
-    }
-  }
-
-  /**
     *
     * @param apiStore    name of the API store
     * @param staticUrls  list of static urls which can benefit with substitutions from the whole config. Each URL are separated by ":" character
@@ -116,16 +103,15 @@ object ProcessCacheService extends LazyLogging {
   def run(apiStore: String, staticUrls: List[String]) {
     logger.info("Starting to cache data")
     val decider:Supervision.Decider = {
-      case e:IllegalUriException => {
-        logger.error(e.getMessage)
-        errorEncountered = true
-        Supervision.resume
-      }
+//      case e:IllegalUriException => {
+//        logger.error(e.getMessage)
+//        errorEncountered = true
+//        Supervision.resume
+//      }
       case _ => Supervision.stop
     }
     implicit val system = ActorSystem()
     implicit val _ = ActorMaterializer(ActorMaterializerSettings(system).withSupervisionStrategy(decider))
-    registerSprayHttpMethods()
     try {
       val config: List[CacheFlow] = ConfigHelpers.buildStaticUrlsConfig(apiStore, staticUrls)
       run(buildRunnablesGraphs(config))

@@ -4,15 +4,14 @@ import java.util.concurrent.TimeUnit
 import javax.xml.ws.http.HTTPException
 
 import akka.actor.ActorSystem
-import com.mogobiz.cache.utils.{CustomSslConfiguration, UrlUtils}
+import com.mogobiz.cache.utils.{CustomSslOkHttpClient, UrlUtils}
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
-import spray.client.pipelining._
-import spray.http.{BasicHttpCredentials, HttpEntity, HttpMethod, HttpResponse}
+import okhttp3._
 
 import scala.collection.JavaConversions._
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, Awaitable, Future}
+import scala.concurrent.{Await, Awaitable}
 
 /**
   * Root type of all configs related to mogobiz-cache.
@@ -33,7 +32,7 @@ case class NoConfig() extends CacheConfig
   *
   * @param uri       uri to call, starting with /
   */
-case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[String, String]) extends CacheConfig {
+case class PurgeConfig(method: String, uri: String, additionalHeaders: Map[String, String]) extends CacheConfig {
   def isByUri = uri contains "${uri}"
 }
 /**
@@ -44,7 +43,7 @@ case class PurgeConfig(method: HttpMethod, uri: String, additionalHeaders: Map[S
   * @param uri       uri to call, starting with /
   * @param maxClient specify the parallelism
   */
-case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: Integer, uri: String, additionalHeaders: Map[String, String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
+case class HttpConfig(protocol: String, method: String, host: String, port: Integer, uri: String, additionalHeaders: Map[String, String], maxClient: Integer) extends ParallelCacheConfig(maxClient) {
 
 
   val uriStringContext = UrlUtils.uriAsStringContext(uri)
@@ -53,8 +52,8 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
   /**
     * @return the full uri without replacing any values inside $uri
     */
-  def getFullUri: String = {
-    s"$protocol://$host:$port$uri"
+  def getFullUri(): String = {
+    s"${protocol}://${host}:${port}${uri}"
   }
 
   /**
@@ -62,11 +61,11 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
     * @return the full uri with the uri interpolated.
     */
   def getFullUri(params: Map[String,String]): String = {
-    s"$getProtocolHostPort${getRelativeUri(params)}"
+    s"${getProtocolHostPort}${getRelativeUri(params)}"
   }
 
   def getProtocolHostPort = {
-    s"$protocol://$host:$port"
+    s"${protocol}://${host}:${port}"
   }
 
   /**
@@ -105,39 +104,40 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
     class EsIterator()(implicit actorSystem: ActorSystem) extends Iterator[Map[String, List[String]]] {
 
       import ConfigHelpers._
-      import actorSystem.dispatcher
 
       val timeout = ConfigFactory.load().getOrElse("mogobiz.cache.timeout", 30).toLong
 
-      val pipeline = CustomSslConfiguration.getPipeline(host, port, protocol.toLowerCase == "https")
-      /**
-        * Initial scrollId by asking elastic search to scan and scroll. No hits are returned by this request.
-        */
-      private[this] var scrollId = {
-        val fieldsRequested: String = distinctFields.mkString(",")
-        val urlScanScroll: String = s"$protocol://$host:$port/$index/${`type`}/_search?scroll=$scrollTime&search_type=scan&fields=$fieldsRequested&size=$batchSize"
-        val scanScrollHttpRequest = if (searchGuardConfig.active) {
-          Get(urlScanScroll) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password)) ~> addHeader("Accept", "application/json")
-        } else {
-          Get(urlScanScroll) ~> addHeader("Accept", "application/json")
-        }
-        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
-        val response: HttpResponse = getFuture(httpResponseF)
-        val responseStr: String = response.entity.asString
-        if (response.status.isFailure) {
-          logger.error(s"Failed to retrieve fields [$fieldsRequested] from index $index and type ${`type`}")
-          logger.error(responseStr)
-          throw new HTTPException(response.status.intValue)
-        } else {
-          logger.debug(s"ES Response :\n$responseStr")
-        }
-        ConfigFactory.parseString(responseStr).getString("_scroll_id")
+      val client = if(searchGuardConfig.active) {
+        CustomSslOkHttpClient.getClient(Some(new Authenticator {
+          override def authenticate(route: Route, response: Response): Request = {
+            response.request().newBuilder()
+              .header("Authorization", Credentials.basic(searchGuardConfig.username, searchGuardConfig.password))
+              .build()
+          }
+        }))
+      } else {
+        CustomSslOkHttpClient.getClient()
       }
 
       /**
-        * Iterator of the different hits.
+        * Initial scrollId by asking elastic search to scroll. No hits are returned by this request.
         */
-      private[this] var dataIterator: Iterator[Map[String, List[String]]] = scrollData()
+      private[this] var (scrollId, dataIterator: Iterator[Map[String, List[String]]]) = {
+        val fieldsRequested: String = distinctFields.mkString(",")
+        val urlScroll: String = s"${protocol}://${host}:${port}/${index}/${`type`}/_search?scroll=${scrollTime}&fields=${fieldsRequested}&size=${batchSize}"
+        val scrollHttpRequest = new Request.Builder().url(urlScroll).build()
+        val response: Response = client.newCall(scrollHttpRequest).execute()
+        val responseStr: String = response.body().string()
+        if (!response.isSuccessful) {
+          logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index} and type ${`type`}")
+          logger.error(s"Attempted to reach ${urlScroll} with failure.")
+          logger.error(s"Http response status ${response.code} with body : \n ${responseStr}")
+          throw new HTTPException(response.code)
+        } else {
+          logger.debug(s"ES Response :\n${responseStr}")
+        }
+        parseResponse(responseStr)
+      }
 
       override def hasNext: Boolean = {
         if (dataIterator.hasNext)
@@ -153,33 +153,44 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         * @return an iterator of the different hits. Call ES with scroll_id and build a map containing the fields.
         */
       private def scrollData(): Iterator[Map[String, List[String]]] = {
-        val urlScanScroll = s"$protocol://$host:$port/_search/scroll?scroll=$scrollTime"
-        val scanScrollHttpRequest = if (searchGuardConfig.active) {
-          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password)) ~> addHeader("Accept", "application/json")
+        val urlScroll = s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}"
+        val scrollHttpRequest = new Request.Builder().url(urlScroll).post(RequestBody.create(MediaType.parse("text/plain;charset=utf-8"), scrollId)).build()
+        val response: Response = client.newCall(scrollHttpRequest).execute()
+        val responseStr: String = response.body().string()
+        if (!response.isSuccessful) {
+          logger.error(s"Failed to scroll from index ${index} and type ${`type`}")
+          logger.error(s"Http response status ${response.code} with body : \n ${responseStr}")
+          throw new HTTPException(response.code)
         } else {
-          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addHeader("Accept", "application/json")
+          logger.debug(s"ES Response :\n${responseStr}")
+          val (scrollIdInResponse, iterator) = parseResponse(responseStr)
+          scrollId = scrollIdInResponse
+          iterator
         }
-        val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
-        val response: HttpResponse = getFuture(httpResponseF)
-        val config: Config = ConfigFactory.parseString(response.entity.asString)
-        scrollId = config.getString("_scroll_id")
+      }
+
+      private def parseResponse(responseStr: String): (String, Iterator[Map[String, List[String]]]) = {
+        val config: Config = ConfigFactory.parseString(responseStr)
+        val scrollId = config.getString("_scroll_id")
         val hits = config.getConfigList("hits.hits")
-        hits.map(c => {
+        val iterator: Iterator[Map[String, List[String]]] = hits.map(c => {
           import ConfigHelpers._
           if (c.hasPath("fields")) {
             val fieldsConfig: Config = c.getConfig("fields")
-            distinctFields.flatMap{f => {
+            distinctFields.flatMap { f => {
               val quotedField = "\"" + f + "\""
               if (fieldsConfig.hasPath(quotedField)) {
                 Some(`type` + '.' + f -> fieldsConfig.getAsList[AnyRef](quotedField).map(_.toString))
               } else {
                 None
               }
-            }}.toMap
+            }
+            }.toMap
           } else {
             Map.empty[String, List[String]]
           }
         }).toIterator
+        (scrollId, iterator)
       }
 
       override def next(): Map[String, List[String]] = dataIterator.next()

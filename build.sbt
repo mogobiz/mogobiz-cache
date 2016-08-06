@@ -35,10 +35,10 @@ val scalaTestV = "3.0.0-M16-SNAP6"
 libraryDependencies in ThisBuild ++= Seq(
   "org.scala-lang" % "scala-reflect" % scalaVersion.value,
   "com.typesafe.akka" %% "akka-stream-experimental" % akkaStreamV,
-  "io.spray" %% "spray-client" % sprayV,
   "com.typesafe.scala-logging" %% "scala-logging" % scalaLoggingV,
   "org.slf4j" % "slf4j-log4j12" % slf4jLog4jV,
-  "org.scalatest" % "scalatest_2.11" % scalaTestV
+  "org.scalatest" % "scalatest_2.11" % scalaTestV,
+  "com.squareup.okhttp3" % "okhttp" % "3.4.1"
 )
 
 enablePlugins(GitVersioning, GitBranchPrompt)
