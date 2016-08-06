@@ -53,8 +53,8 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
   /**
     * @return the full uri without replacing any values inside $uri
     */
-  def getFullUri(): String = {
-    s"${protocol}://${host}:${port}${uri}"
+  def getFullUri: String = {
+    s"$protocol://$host:$port$uri"
   }
 
   /**
@@ -62,11 +62,11 @@ case class HttpConfig(protocol: String, method: HttpMethod, host: String, port: 
     * @return the full uri with the uri interpolated.
     */
   def getFullUri(params: Map[String,String]): String = {
-    s"${getProtocolHostPort}${getRelativeUri(params)}"
+    s"$getProtocolHostPort${getRelativeUri(params)}"
   }
 
   def getProtocolHostPort = {
-    s"${protocol}://${host}:${port}"
+    s"$protocol://$host:$port"
   }
 
   /**
@@ -115,21 +115,21 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         */
       private[this] var scrollId = {
         val fieldsRequested: String = distinctFields.mkString(",")
-        val urlScanScroll: String = s"${protocol}://${host}:${port}/${index}/${`type`}/_search?scroll=${scrollTime}&search_type=scan&fields=${fieldsRequested}&size=${batchSize}"
+        val urlScanScroll: String = s"$protocol://$host:$port/$index/${`type`}/_search?scroll=$scrollTime&search_type=scan&fields=$fieldsRequested&size=$batchSize"
         val scanScrollHttpRequest = if (searchGuardConfig.active) {
-          Get(urlScanScroll) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password))
+          Get(urlScanScroll) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password)) ~> addHeader("Accept", "application/json")
         } else {
-          Get(urlScanScroll)
+          Get(urlScanScroll) ~> addHeader("Accept", "application/json")
         }
         val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
         val response: HttpResponse = getFuture(httpResponseF)
         val responseStr: String = response.entity.asString
         if (response.status.isFailure) {
-          logger.error(s"Failed to retrieve fields [${fieldsRequested}] from index ${index} and type ${`type`}")
+          logger.error(s"Failed to retrieve fields [$fieldsRequested] from index $index and type ${`type`}")
           logger.error(responseStr)
-          throw new HTTPException(response.status.intValue);
+          throw new HTTPException(response.status.intValue)
         } else {
-          logger.debug(s"ES Response :\n${responseStr}")
+          logger.debug(s"ES Response :\n$responseStr")
         }
         ConfigFactory.parseString(responseStr).getString("_scroll_id")
       }
@@ -153,11 +153,11 @@ case class EsConfig(protocol: String, host: String, port: Integer, index: String
         * @return an iterator of the different hits. Call ES with scroll_id and build a map containing the fields.
         */
       private def scrollData(): Iterator[Map[String, List[String]]] = {
-        val urlScanScroll = s"${protocol}://${host}:${port}/_search/scroll?scroll=${scrollTime}"
+        val urlScanScroll = s"$protocol://$host:$port/_search/scroll?scroll=$scrollTime"
         val scanScrollHttpRequest = if (searchGuardConfig.active) {
-          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password))
+          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addCredentials(BasicHttpCredentials(searchGuardConfig.username, searchGuardConfig.password)) ~> addHeader("Accept", "application/json")
         } else {
-          Post(urlScanScroll).withEntity(HttpEntity(scrollId))
+          Post(urlScanScroll).withEntity(HttpEntity(scrollId)) ~> addHeader("Accept", "application/json")
         }
         val httpResponseF: Future[HttpResponse] = pipeline.flatMap(p => p(scanScrollHttpRequest))
         val response: HttpResponse = getFuture(httpResponseF)
